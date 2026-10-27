@@ -38,7 +38,13 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        shell: bash
+        run: |
+          ./gradlew assembleDebug --console=plain 2>&1 | tee ../build.log || code=$?
+          if [ "${code:-0}" -ne 0 ]; then
+            grep -E "What went wrong|error:|Could not|FAILED|Caused by|Unable|not found|Execution failed" -A2 ../build.log | head -30 | while IFS= read -r l; do echo "::error::${l:0:300}"; done
+            exit "$code"
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
