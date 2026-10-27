@@ -241,6 +241,20 @@ const fmtF = s => s ? parse(s).toLocaleDateString('es-DO', {day: 'numeric', mont
 const fmtC = s => s ? parse(s).toLocaleDateString('es-DO', {day: 'numeric', month: 'short'}) : '';
 
 /* ----- almacenamiento: base compartida si existe, si no este navegador ----- */
+const CAPN = window.Capacitor;
+const ES_APP = !!(CAPN && CAPN.isNativePlatform && CAPN.isNativePlatform());
+const NATIVO = () => ES_APP && CAPN.Plugins && CAPN.Plugins.Filesystem && CAPN.Plugins.Share;
+function blobB64(blob) { return new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = ko; r.readAsDataURL(blob); }); }
+/* En el APK no existen las descargas del navegador: se guarda el archivo y se abre el menú de Android (Drive, WhatsApp, Archivos...) */
+async function guardarNativo(blob, nombre) {
+  try {
+    const r = await CAPN.Plugins.Filesystem.writeFile({path: nombre, data: await blobB64(blob), directory: 'CACHE'});
+    await CAPN.Plugins.Share.share({title: nombre, url: r.uri, dialogTitle: 'Guardar o compartir'});
+  } catch (e) {
+    const m = String((e && e.message) || e || '');
+    if (!/cancel/i.test(m)) aviso('No se pudo guardar el archivo: ' + m);
+  }
+}
 const LS = 'mnad-v1';
 function lsLoad() { try { const j = JSON.parse(localStorage.getItem(LS) || '{}'); COLS.forEach(c => S[c] = j[c] || []); } catch (e) {} }
 function lsSave() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) {} }
@@ -566,12 +580,27 @@ function imprimirPrestamoCliente(id) {
   ${d.moraPend > 0 ? `<div>Mora pendiente: <b>${money(d.moraPend)}</b> (separada del saldo) · Mora cobrada: ${money(d.moraCobrada)}</div>` : ''}
   <h2 style="font-size:14px;margin:12px 0 6px">Pagos realizados</h2>
   ${pagos.length ? '<table><thead><tr><th>Fecha</th><th>Tipo</th><th>Nota</th><th style="text-align:right">Monto</th></tr></thead><tbody>' + pagos.map(x=>`<tr><td>${fmtF(x.fecha)}</td><td>${x.tipo==='mora'?'Mora':'Cuota'}</td><td>${esc(x.nota||'')}</td><td style="text-align:right">${money(x.monto)}</td></tr>`).join('') + '</tbody></table>' : '<div class="muted">Sin pagos</div>'}
-  <script>window.onload=function(){window.print();};</script>
+  <script>window.onload=function(){window.print();};<\/script>
   </body></html>`;
+  abrirImpresion(html, 'prestamo-' + (cli.nombre || 'cliente'));
+}
+
+/* En el navegador abre la ventana de impresión; en el APK (que no puede imprimir) comparte el documento como archivo .html para abrirlo e imprimir/guardar PDF desde otra app */
+function abrirImpresion(html, nombre) {
+  if (NATIVO()) {
+    const limpio = html.replace(/<script>window\.onload[^<]*<\/script>/, '');
+    guardarNativo(new Blob([limpio], {type: 'text/html'}), nombre.replace(/[^a-z0-9áéíóúñ]+/gi, '-').toLowerCase() + '-' + hoy() + '.html');
+    return;
+  }
   const w = window.open('', '_blank');
   if (w) { w.document.write(html); w.document.close(); }
 }
-
+function imprimirVista() {
+  if (!NATIVO()) { window.print(); return; }
+  const estilos = [...document.querySelectorAll('style')].map(x => x.outerHTML).join('');
+  const html = '<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reporte</title>' + estilos + '</head><body>' + document.querySelector('#view').outerHTML + '</body></html>';
+  abrirImpresion(html, 'reporte');
+}
 function imprimirTablaPrestamo(id) {
   const p = S.prestamos.find(x => x.id === id); if (!p) return;
   const d = detalle(p), cli = cliente(p.clienteId) || {}, e = estadoPrestamo(p);
@@ -595,10 +624,9 @@ function imprimirTablaPrestamo(id) {
     <thead><tr><th>#</th><th>Vence</th><th class="num">Cuota</th><th class="num">Abonado</th><th class="num">Falta</th><th>Estado</th></tr></thead>
     <tbody>${d.cuotas.map(c=>`<tr><td>${c.n}</td><td>${fmtF(c.vence)}</td><td class="num">${money(c.monto)}</td><td class="num">${money(c.abona)}</td><td class="num">${money(c.falta)}</td><td>${pe[c.estado]}${c.estado==='vencida'?' ('+c.dias+' d)':''}</td></tr>`).join('')}</tbody>
   </table>
-  <script>window.onload=function(){window.print();};</script>
+  <script>window.onload=function(){window.print();};<\/script>
   </body></html>`;
-  const w = window.open('', '_blank');
-  if (w) { w.document.write(html); w.document.close(); }
+  abrirImpresion(html, 'prestamo-' + (cli.nombre || 'cliente'));
 }
 
 function verPrestamo(id) {
@@ -979,6 +1007,7 @@ function generarImagenRecibo() {
       canvas.toBlob(function(blob) {
         if (!blob) { aviso('No se pudo generar la imagen.'); return; }
         const nombre = `recibo-${(RECIBO && RECIBO.titulo ? RECIBO.titulo.replace(/[^a-z0-9]/gi,'-').toLowerCase() : 'recibo')}-${Date.now()}.png`;
+        if (NATIVO()) { guardarNativo(blob, nombre); URL.revokeObjectURL(url); return; }
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
         a.download = nombre;
@@ -1157,17 +1186,19 @@ function construirXlsx() {
   return zipStore(files);
 }
 function descargar(blob, nombre) {
+  if (NATIVO()) { guardarNativo(blob, nombre); return; }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nombre; document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
 }
 function respaldoJson() { return new Blob([JSON.stringify({app: 'mi-negocio-al-dia', version: 1, fecha: hoy(), datos: S})], {type: 'application/json'}); }
 async function compartir(blob, nombre) {
+  if (NATIVO()) { guardarNativo(blob, nombre); return; }
   const f = new File([blob], nombre, {type: blob.type});
   try { if (navigator.canShare && navigator.canShare({files: [f]})) { await navigator.share({files: [f], title: nombre}); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
   descargar(blob, nombre); aviso('Tu teléfono no permite compartir desde aquí; se descargó el archivo.');
 }
 function formRespaldo() {
-  const puedeCompartir = !!(navigator.canShare && navigator.share);
+  const puedeCompartir = NATIVO() || !!(navigator.canShare && navigator.share);
   abrir(`<h2>Respaldo de tus datos</h2>
   <p class="small muted" style="margin:0 0 12px">Tus datos viven en este equipo. Haz un respaldo cada cierto tiempo y guárdalo en Google Drive o envíatelo por WhatsApp para no perder nada.</p>
   <div class="panel">
@@ -1352,10 +1383,10 @@ const ACT = {
   'bk-xlsx-share': () => compartir(construirXlsx(), `respaldo-${hoy()}.xlsx`),
   'bk-json': () => descargar(respaldoJson(), `respaldo-${hoy()}.json`),
   'bk-json-share': () => compartir(respaldoJson(), `respaldo-${hoy()}.json`),
-  rango: el => rangoRapido(el.dataset.k), imprimir: () => window.print(),
+  rango: el => rangoRapido(el.dataset.k), imprimir: () => imprimirVista(),
   'recibo-venta': el => reciboVenta(el.dataset.id), 'recibo-prestamo': el => reciboPrestamo(el.dataset.id), 'recibo-pago': el => reciboPago(el.dataset.id),
-  'rec-imprimir': () => window.print(),
-  'rec-copiar': async () => { try { await navigator.clipboard.writeText(RECIBO.txt); aviso('Recibo copiado'); } catch (e) { aviso('No se pudo copiar.'); } },
+  'rec-imprimir': () => NATIVO() ? generarImagenRecibo() : window.print(),
+  'rec-copiar': async () => { try { await navigator.clipboard.writeText(RECIBO.txt); aviso('Recibo copiado'); } catch (e) { if (NATIVO()) { try { await CAPN.Plugins.Share.share({text: RECIBO.txt, dialogTitle: 'Compartir recibo'}); return; } catch (e2) {} } aviso('No se pudo copiar.'); } },
   'rec-imagen': () => generarImagenRecibo(),
   'nueva-venta': () => formVenta(), 'save-venta': () => saveVenta(),
   'mas-linea': () => { $('#lineas').insertAdjacentHTML('beforeend', lineaVenta()); },
@@ -1402,7 +1433,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#modal'
 /* ----- arranque: primero la base compartida; si no existe, este navegador ----- */
 function marcaSync(nube) {
   $('#dot').className = 'dot' + (nube ? '' : ' off');
-  $('#syncTxt').textContent = nube ? 'Guardado en la nube' : 'Guardando solo en este navegador';
+  $('#syncTxt').textContent = nube ? 'Guardado en la nube' : (ES_APP ? 'Guardando solo en este teléfono' : 'Guardando solo en este navegador');
 }
 async function arrancar() {
   $('#view').innerHTML = '<div class="panel"><div class="empty">Cargando tus datos…</div></div>';
@@ -1420,9 +1451,10 @@ async function arrancar() {
   }, err => { if (err && err.code === 'revoked') { DB = null; marcaSync(false); } }));
 }
 pintar = (orig => function () { try { orig(); } catch (e) { console.error(e); } })(pintar);
+if (ES_APP) document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[target="_blank"]'); if (a && a.href) { e.preventDefault(); location.href = a.href; } }, true);
 arrancar();
 /* Sin internet: guarda la app en el equipo y pide que el navegador no borre los datos */
-if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
 </script>
 
