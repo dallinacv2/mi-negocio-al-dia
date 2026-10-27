@@ -1,0 +1,8 @@
+node_modules/
+index.html.bak*
+*.apk
+android/.gradle/
+android/build/
+android/app/build/*
+!android/app/build/.npmkeep
+local.properties
