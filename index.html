@@ -172,6 +172,19 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
   .content{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
 }
 @media print{.nav{display:none!important}}
+/* bloqueo con PIN */
+#lock{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:16px}
+#lock[hidden]{display:none}
+.lockbox{width:100%;max-width:320px;text-align:center}
+.lockbrand{font:700 22px var(--f-display);margin-bottom:6px}
+#lock-msg{margin:0 0 14px;color:var(--muted);min-height:22px}
+.lockdots{display:flex;gap:12px;justify-content:center;margin-bottom:18px;min-height:16px}
+.lockdots i{width:14px;height:14px;border-radius:50%;border:2px solid var(--accent);display:block}
+.lockdots i.on{background:var(--accent)}
+.lockpad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.lockpad button{font:600 24px var(--f-num);padding:16px 0;border-radius:14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
+.lockpad button:active{background:var(--accent-soft)}
+.lockforgot{margin-top:18px;background:none;border:0;color:var(--muted);text-decoration:underline;cursor:pointer;font-size:13px}
 @media print{
   body.rec .wrap,body.rec #toast{display:none!important}
   body.rec,body.rec .veil{background:#fff!important}
@@ -218,6 +231,9 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
 </div>
 <div id="modal"></div>
 <div id="toast" class="toast" hidden></div>
+<div id="lock" hidden><div class="lockbox"><div class="lockbrand">Mi Negocio Al Día</div><p id="lock-msg">Escribe tu PIN</p><div class="lockdots" id="lock-dots"></div>
+  <div class="lockpad"><button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button><button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button><button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button><button type="button" data-k="del" aria-label="Borrar">⌫</button><button type="button" data-k="0">0</button><button type="button" data-k="ok" aria-label="Entrar">✓</button></div>
+  <button type="button" class="lockforgot" id="lock-forgot">Olvidé mi PIN</button></div></div>
 <script>
 /* ===== Núcleo: datos, utilidades y cálculo de préstamos ===== */
 const DATA_COLS = ['clientes','prestamos','pagos','productos','ventas','gastos'];
@@ -269,10 +285,69 @@ async function guardarNativo(blob, nombre) {
 }
 const LS = 'mnad-v1';
 function lsLoad() { try { const j = JSON.parse(localStorage.getItem(LS) || '{}'); COLS.forEach(c => S[c] = j[c] || []); } catch (e) {} }
-function lsSave() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) {} }
+function lsSave() {
+  try { localStorage.setItem(LS, JSON.stringify(S)); return true; }
+  catch (e) { aviso('⚠ No se pudo guardar en el teléfono (¿sin espacio?). Haz un respaldo ahora.'); return false; }
+}
+
+/* ----- respaldos: recordatorio, contador de cambios y copias automáticas del teléfono ----- */
+const MK = 'mnad-meta', CK = 'mnad-copias';
+const meta = () => { try { return JSON.parse(localStorage.getItem(MK) || '{}') || {}; } catch (e) { return {}; } };
+const metaSet = o => { try { localStorage.setItem(MK, JSON.stringify({...meta(), ...o})); } catch (e) {} };
+const contarCambio = () => metaSet({cambios: (meta().cambios || 0) + 1});
+function marcarRespaldo() { metaSet({ult: hoy(), cambios: 0, pospuesto: ''}); pintar(); }
+/* Pide respaldo si pasaron 7 días, si nunca se hizo uno, o si hubo muchos cambios (40) desde el último */
+function respaldoPendiente() {
+  if (!DATA_COLS.some(c => S[c].length)) return null;
+  const m = meta(), cambios = m.cambios || 0, dias = m.ult ? diffDias(hoy(), m.ult) : null;
+  if (m.pospuesto === hoy()) return null;
+  if (dias === null) return 'Todavía no has hecho ningún respaldo de tus datos.';
+  if (dias >= 7) return `Hace ${dias} días que no haces un respaldo.`;
+  if (cambios >= 40) return `Has hecho ${cambios} cambios desde tu último respaldo.`;
+  return null;
+}
+function bannerRespaldo() {
+  const t = respaldoPendiente(); if (!t) return '';
+  return `<div style="background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:12px;padding:14px;margin-bottom:14px">
+    <b>Haz tu respaldo</b><div class="small muted" style="margin:2px 0 10px">${t} Si pierdes o cambias el teléfono, sin respaldo se pierden tus clientes, préstamos y ventas.</div>
+    <button class="btn sm pri" data-act="respaldo">Hacer respaldo ahora</button> <button class="btn sm" data-act="respaldo-luego">Recordarme mañana</button></div>`;
+}
+const copiasLeer = () => { try { const l = JSON.parse(localStorage.getItem(CK) || '[]'); return Array.isArray(l) ? l : []; } catch (e) { return []; } };
+function copiasGuardar(l) {
+  while (l.length) { try { localStorage.setItem(CK, JSON.stringify(l)); return true; } catch (e) { const i = l.findIndex(x => x.t === 'dia'); if (i < 0) break; l.splice(i, 1); } }
+  return false;
+}
+/* Una copia al empezar cada día (últimos 7 días): sirve para deshacer errores. No reemplaza el respaldo fuera del teléfono. */
+function copiaDelDia() {
+  if (DB || !DATA_COLS.some(c => S[c].length)) return;
+  const f = hoy(), l = copiasLeer(); if (l.some(x => x.t === 'dia' && x.f === f)) return;
+  const d = JSON.stringify(S); if (d.length > 1500000) return;
+  const dias = l.filter(x => x.t === 'dia'); dias.push({t: 'dia', f, d}); dias.sort((a, b) => a.f < b.f ? -1 : 1);
+  copiasGuardar([...l.filter(x => x.t === 'antes'), ...dias.slice(-7)]);
+}
+function copiaAntes() {
+  if (DB) return; const d = JSON.stringify(S); if (d.length > 1500000) return;
+  copiasGuardar([...copiasLeer().filter(x => x.t === 'dia'), {t: 'antes', f: hoy(), d}]);
+}
+function respaldoActualAntesRestaurar() { copiaAntes(); }
+function restaurarCopia(i) {
+  const c = copiasLeer()[i]; if (!c) return;
+  confirmar('¿Volver a esta copia?', `Se reemplazan los datos de ahora por los de la copia (${c.t === 'antes' ? 'de justo antes de la última restauración' : 'del ' + fmtF(c.f)}). Antes se guarda una copia de lo actual por si te arrepientes.`, 'Sí, volver', () => {
+    let j; try { j = JSON.parse(c.d); } catch (e) { return aviso('Esa copia está dañada.'); }
+    copiaAntes(); COLS.forEach(k => { S[k] = Array.isArray(j[k]) ? j[k] : []; }); lsSave(); cerrar(); pintar(); aviso('Copia restaurada');
+  });
+}
+/* Aviso de confirmación propio (encima de cualquier ventana abierta) */
+function confirmar(titulo, detalle, boton, fn) {
+  const d = document.createElement('div'); d.className = 'veil'; d.style.zIndex = 150;
+  d.innerHTML = `<div class="sheet" role="alertdialog"><h2>${esc(titulo)}</h2><p style="margin:0 0 12px">${esc(detalle)}</p><div class="foot"><button class="btn" data-cf="no">Cancelar</button><button class="btn danger" data-cf="si">${esc(boton)}</button></div></div>`;
+  d.addEventListener('click', e => { const b = e.target.closest('[data-cf]'); if (!b && e.target !== d) return; d.remove(); if (b && b.dataset.cf === 'si') fn(); });
+  document.body.appendChild(d);
+}
 
 async function guardar(col, obj) {
   if (!obj.id) obj.id = uid();
+  contarCambio();
   const i = S[col].findIndex(x => x.id === obj.id);
   if (i >= 0) S[col][i] = obj; else S[col].push(obj);
   if (DB) { try { await DB.collection(col).doc(obj.id).set(obj); } catch (e) { aviso('No se pudo guardar. Intenta de nuevo.'); } }
@@ -281,6 +356,7 @@ async function guardar(col, obj) {
   return obj;
 }
 async function borrar(col, id) {
+  contarCambio();
   S[col] = S[col].filter(x => x.id !== id);
   if (DB) { try { await DB.collection(col).doc(id).delete(); } catch (e) { aviso('No se pudo borrar.'); } }
   else lsSave();
@@ -299,8 +375,12 @@ function interesTotal(p) {
   const meses = p.cuotas * FREQ[p.freq] / 30;
   return p.base === 'mensual' ? p.capital * p.tasa / 100 * meses : p.capital * p.tasa / 100;
 }
-const totalPrestamo = p => p.capital + interesTotal(p);
-const valorCuota = p => totalPrestamo(p) / p.cuotas;
+/* Todo en centavos exactos: la última cuota absorbe la diferencia para que la suma de las cuotas sea igual al total */
+const r2 = n => Math.round(n * 100) / 100;
+const TOL = 0.05;   /* diferencias menores a 5 centavos no cuentan como deuda */
+const totalPrestamo = p => r2(p.capital + interesTotal(p));
+const valorCuota = p => r2(totalPrestamo(p) / p.cuotas);
+const montoCuota = (p, i) => i < p.cuotas ? valorCuota(p) : r2(totalPrestamo(p) - valorCuota(p) * (p.cuotas - 1));
 function fechaCuota(p, i) { return p.freq === 'mensual' ? sumaMeses(p.inicio, i) : sumaDias(p.inicio, i * FREQ[p.freq]); }
 
 /* El dinero cobrado se aplica a la cuota más antigua primero */
@@ -313,24 +393,27 @@ function detalle(p, fecha = hoy()) {
   /* Cada pago se reparte entre las cuotas más antiguas; la parte pagada tarde deja mora según los días que tardó */
   let mora = 0, atrasoMax = 0, vencido = 0, proxima = null;
   const venceDe = i => fechaCuota(p, i), cubierto = new Array(p.cuotas + 1).fill(0);
-  pg.forEach(x => { let m = x.monto; for (let i = 1; i <= p.cuotas && m > 0.0001; i++) { const cabe = vc - cubierto[i]; if (cabe <= 0.0001) continue; const t = Math.min(cabe, m); cubierto[i] += t; m -= t; mora += t * tasaMora * Math.max(0, diffDias(x.fecha, venceDe(i))); } });
+  pg.forEach(x => { let m = x.monto; for (let i = 1; i <= p.cuotas && m > 0.0001; i++) { const cabe = montoCuota(p, i) - cubierto[i]; if (cabe <= 0.0001) continue; const t = Math.min(cabe, m); cubierto[i] += t; m -= t; mora += t * tasaMora * Math.max(0, diffDias(x.fecha, venceDe(i))); } });
   const cuotas = [];
   for (let i = 1; i <= p.cuotas; i++) {
     const vence = venceDe(i);
-    const abona = Math.min(cubierto[i], vc);
-    const falta = Math.max(0, Math.round((vc - abona) * 100) / 100);
+    const mc = montoCuota(p, i);
+    const abona = Math.min(cubierto[i], mc);
+    const faltaRaw = Math.max(0, mc - abona);
+    const falta = faltaRaw < TOL ? 0 : r2(faltaRaw);
     const dias = falta > 0 ? Math.max(0, diffDias(fecha, vence)) : 0;
     let estado = 'pendiente';
     if (falta === 0) estado = 'pagada'; else if (dias > 0) estado = 'vencida'; else if (abona > 0) estado = 'parcial';
     if (estado === 'vencida') { vencido += falta; atrasoMax = Math.max(atrasoMax, dias); mora += falta * tasaMora * dias; }
     if (falta > 0 && !proxima) proxima = {n: i, vence, falta, dias};
-    cuotas.push({n: i, vence, monto: vc, abona, falta, dias, estado});
+    cuotas.push({n: i, vence, monto: mc, abona, falta, dias, estado});
   }
   mora = Math.round(mora * 100) / 100;
   const moraCobrada = S.pagos.filter(x => x.tipo === 'mora' && x.refId === p.id).reduce((a, x) => a + x.monto, 0);
   const moraPend = Math.max(0, Math.round((mora - moraCobrada) * 100) / 100);
   const total = totalPrestamo(p);
-  const saldo = Math.max(0, Math.round((total - pagado) * 100) / 100);
+  const saldoRaw = total - pagado;
+  const saldo = saldoRaw < TOL ? 0 : r2(saldoRaw);
   return {cuotas, pagado, saldo, total, interes: interesTotal(p), vc, mora, moraCobrada, moraPend, atrasoMax, vencido, proxima, saldado: saldo === 0};
 }
 function estadoPrestamo(p) {
@@ -346,7 +429,7 @@ const cliente = id => S.clientes.find(c => c.id === id);
 const nombreCli = id => (cliente(id) || {nombre: 'Cliente general'}).nombre;
 const producto = id => S.productos.find(p => p.id === id);
 const ventaPagado = v => v.pagado0 + S.pagos.filter(x => x.tipo === 'venta' && x.refId === v.id).reduce((a, x) => a + x.monto, 0);
-const ventaSaldo = v => Math.max(0, Math.round((v.total - ventaPagado(v)) * 100) / 100);
+const ventaSaldo = v => Math.max(0, Math.round((v.total - ventaPagado(v) - (v.financiado || 0)) * 100) / 100);
 function deudaCliente(id) {
   const pr = S.prestamos.filter(p => p.clienteId === id).reduce((a, p) => a + detalle(p).saldo, 0);
   const vt = S.ventas.filter(v => v.clienteId === id).reduce((a, v) => a + ventaSaldo(v), 0);
@@ -405,7 +488,7 @@ function agendaCobros() {
   S.ventas.forEach(v => {
     const s = ventaSaldo(v); if (s <= 0) return;
     const cli = cliente(v.clienteId) || {};
-    out.push({kind: 'venta', id: v.id, nombre: cli.nombre || 'Cliente general', tel: cli.tel, vence: v.vence || '', dias: v.vence ? Math.max(0, diffDias(hoy(), v.vence)) : 0, monto: s, mora: 0,
+    out.push({kind: 'venta', id: v.id, cid: v.clienteId, nombre: cli.nombre || 'Cliente general', tel: cli.tel, vence: v.vence || '', dias: v.vence ? Math.max(0, diffDias(hoy(), v.vence)) : 0, monto: s, mora: 0,
       det: `Venta a crédito del ${fmtC(v.fecha)}`});
   });
   return out.sort((a, b) => (a.vence || '9999') < (b.vence || '9999') ? -1 : 1);
@@ -421,7 +504,7 @@ function rowCobro(c) {
   return `<div class="row"><div class="main"><div class="t">${esc(c.nombre)} ${pillCobro(c)}</div>
     <div class="s">${esc(c.det)}${c.vence ? ' · ' + fmtF(c.vence) : ''}${c.mora > 0 ? ' · mora estimada ' + money(c.mora) : ''}</div></div>
     <div class="amt">${money(c.monto)}</div>
-    <div class="acts">${wa(c.nombre, c.tel, msgCobro(c))}<button class="btn sm pri" data-act="cobrar" data-kind="${c.kind}" data-id="${c.id}">Cobrar</button></div></div>`;
+    <div class="acts">${wa(c.nombre, c.tel, msgCobro(c))}<button class="btn sm pri" data-act="cobrar" data-kind="${c.kind}" data-id="${c.id}">Cobrar</button>${c.kind === 'venta' && c.cid ? `<button class="btn sm" data-act="financiar" data-id="${c.id}">Financiar</button>` : ''}</div></div>`;
 }
 
 /* ----- Inicio ----- */
@@ -440,7 +523,7 @@ function vInicio(cobros) {
   const top = masVendidos();
   const mx = top.length ? top[0].cant : 1;
   const hayEj = COLS.some(c => S[c].some(x => x.ejemplo));
-  return `<div class="sum-grid">
+  return `${bannerRespaldo()}<div class="sum-grid">
     <div class="sum-card ventas"><div class="sum-ico">🛒</div><div class="sum-info"><div class="sum-label">Vendido hoy</div><div class="sum-value">${money(vendido)}</div><div class="sum-sub">Ventas del día</div></div></div>
     <div class="sum-card cobros"><div class="sum-ico">💳</div><div class="sum-info"><div class="sum-label">Dinero que entró hoy</div><div class="sum-value">${money(entro)}</div><div class="sum-sub">Pagos recibidos</div></div></div>
     <div class="sum-card prestamos"><div class="sum-ico">📄</div><div class="sum-info"><div class="sum-label">Por cobrar</div><div class="sum-value">${money(porCobrar)}</div><div class="sum-sub">${activos} préstamos activos</div></div></div>
@@ -720,7 +803,7 @@ function vVentas() {
     return `<div class="row"><div class="main"><div class="t">${esc(nombreCli(v.clienteId))} ${s > 0 ? `<span class="pill ${v.vence && diffDias(hoy(), v.vence) > 0 ? 'bad' : 'warn'}">Debe ${money(s)}</span>` : '<span class="pill ok">Pagada</span>'}</div>
       <div class="s">${fmtF(v.fecha)} · ${v.items.map(i => i.cant + ' ' + esc(i.nombre)).join(', ')}</div></div>
       <div class="amt">${money(v.total)}</div>
-      <div class="acts">${s > 0 ? `<button class="btn sm pri" data-act="cobrar" data-kind="venta" data-id="${v.id}">Cobrar</button>` : ''}<button class="btn sm" data-act="recibo-venta" data-id="${v.id}">Recibo</button><button class="btn sm danger" data-act="del-venta" data-id="${v.id}">Anular</button></div></div>`; }).join('')
+      <div class="acts">${s > 0 ? `<button class="btn sm pri" data-act="cobrar" data-kind="venta" data-id="${v.id}">Cobrar</button>` : ''}${s > 0 && v.clienteId ? `<button class="btn sm" data-act="financiar" data-id="${v.id}">Financiar</button>` : ''}<button class="btn sm" data-act="recibo-venta" data-id="${v.id}">Recibo</button><button class="btn sm danger" data-act="del-venta" data-id="${v.id}">Anular</button></div></div>`; }).join('')
     : vacio('Aún no hay ventas', 'Registra una venta y el inventario baja solo. Si el cliente no paga todo, queda como crédito.')}</div>`;
 }
 
@@ -843,7 +926,7 @@ function formVenta() {
     <div class="full"><label>Productos, cantidad y precio</label><div id="lineas">${lineaVenta()}</div><button class="btn sm" data-act="mas-linea">Agregar otro producto</button></div>
     <div class="full preview" id="tv">Total: <b class="num">${money(0)}</b></div>
     ${fld('cobrado', 'Cobrado ahora (RD$)', '', 'number', 'placeholder="Todo, si lo dejas vacío"')}${fld('fecha', 'Fecha', hoy(), 'date')}
-    <div class="full" id="vencebox" hidden>${fld('vence', 'Si queda saldo, fecha en que pagará', sumaDias(hoy(), 15), 'date')}</div></div>
+    <div class="full" id="vencebox" hidden>${sel('resto', 'Lo que queda sin pagar', [['credito', 'Dejarlo a crédito (sin interés)'], ['financiar', 'Financiarlo en cuotas con interés']], 'credito', 'full')}${fld('vence', 'Si lo dejas a crédito, fecha en que pagará', sumaDias(hoy(), 15), 'date')}</div></div>
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-venta">Registrar venta</button></div>`);
 }
 function leerVenta() {
@@ -862,19 +945,58 @@ function previewVenta() {
 async function saveVenta() {
   const {items, total} = leerVenta();
   if (!items.length) return aviso('Elige al menos un producto.');
-  for (const i of items) { const p = producto(i.pid); if (i.cant > p.stock) return aviso(`Solo quedan ${p.stock} de ${p.nombre}.`); }
+  const porProd = {}; items.forEach(i => { porProd[i.pid] = (porProd[i.pid] || 0) + i.cant; });
+  for (const pid in porProd) { const p = producto(pid); if (porProd[pid] > p.stock) return aviso(`Solo quedan ${p.stock} de ${p.nombre}.`); }
+  if (items.some(i => i.precio < 0)) return aviso('El precio no puede ser negativo.');
   const c = v$('cobrado'), pag = c === '' ? total : num(c);
+  if (pag < 0) return aviso('Lo cobrado no puede ser negativo.');
   if (pag > total + 0.005) return aviso('Lo cobrado es mayor que el total.');
   const cli = v$('cli');
   if (pag < total - 0.005 && !cli) return aviso('Para vender a crédito elige un cliente.');
+  const financiar = pag < total - 0.005 && v$('resto') === 'financiar';
   const fecha = v$('fecha') || hoy();
   const venta = {id: uid(), fecha, clienteId: cli, items, total, pagado0: pag, vence: pag < total - 0.005 ? (v$('vence') || sumaDias(fecha, 15)) : '', creado: Date.now()};
   await guardar('ventas', venta);
-  for (const i of items) { const p = producto(i.pid); await guardar('productos', {...p, stock: p.stock - i.cant}); }
-  cerrar(); aviso('Venta registrada'); reciboVenta(venta.id);
+  for (const pid in porProd) { const p = producto(pid); await guardar('productos', {...p, stock: p.stock - porProd[pid]}); }
+  cerrar();
+  if (financiar) { aviso('Venta registrada. Ahora financia el saldo.'); formFinanciar(venta.id); return; }
+  aviso('Venta registrada'); reciboVenta(venta.id);
+}
+/* ----- Financiar el saldo de una venta: se convierte en un préstamo con cuotas ----- */
+function formFinanciar(id) {
+  const v = S.ventas.find(x => x.id === id); if (!v) return;
+  const sal = ventaSaldo(v);
+  if (sal <= 0) return aviso('Esta venta no tiene saldo pendiente.');
+  if (!v.clienteId) return aviso('Para financiar, la venta debe tener un cliente.');
+  abrir(`<h2>Financiar saldo de la venta</h2><p style="margin:0 0 12px"><b>${esc(nombreCli(v.clienteId))}</b><br><span class="muted small">Venta del ${fmtF(v.fecha)} · total ${money(v.total)} · pagado ${money(ventaPagado(v))} · queda ${money(sal)}</span></p>
+    <div class="f" data-live="prestamo">
+    ${S.tipos.length ? sel('tipo', 'Tipo de préstamo (llena los datos solo)', [['', 'Personalizado'], ...S.tipos.map(t => [t.id, `${t.nombre} · ${t.tasa}% ${t.base === 'mensual' ? 'mensual' : 'total'} · ${t.cuotas} cuotas ${FREQ_P[t.freq]}`])], '', 'full') : ''}
+    ${fld('capital', 'Monto a financiar (RD$)', String(sal), 'number', 'readonly')}${fld('tasa', 'Porcentaje de interés', '', 'number', 'placeholder="0 si no cobras interés"')}
+    ${sel('base', 'El porcentaje se aplica', [['total', 'Una sola vez, sobre todo el saldo'], ['mensual', 'Cada mes de duración']], 'total', 'full')}
+    ${fld('cuotas', 'Número de cuotas', '4', 'number', 'min="1" step="1"')}${sel('freq', 'Pagos', [['diario', 'Diarios'], ['semanal', 'Semanales'], ['quincenal', 'Quincenales'], ['mensual', 'Mensuales']], 'mensual')}
+    ${fld('inicio', 'Fecha de inicio', hoy(), 'date')}${fld('mora', 'Cargo por atraso (% de la cuota por día)', '0', 'number', 'title="Déjalo en 0 si no cobras mora"')}
+    <div class="full"><label for="f-cond">Condiciones (salen en el comprobante)</label><textarea id="f-cond" rows="2"></textarea></div>
+    ${fld('nota', 'Nota interna (no sale en el comprobante)', '', 'text', '', 'full')}
+    <div class="full preview" id="prev">Completa el porcentaje y las cuotas para ver la cuota.</div></div>
+    <div class="foot"><button class="btn" data-act="cerrar">Ahora no (queda a crédito)</button><button class="btn pri" data-act="save-financiar" data-id="${id}">Crear financiamiento</button></div>`);
+  previewPrestamo();
+}
+async function saveFinanciar(id) {
+  const v = S.ventas.find(x => x.id === id); if (!v) return;
+  const sal = ventaSaldo(v);
+  if (sal <= 0) return aviso('Esta venta ya no tiene saldo pendiente.');
+  const p = leerPrestamo(); p.capital = sal;
+  if (p.tasa < 0) return aviso('El porcentaje no puede ser negativo.');
+  const tp = S.tipos.find(t => t.id === v$('tipo'));
+  const nuevo = {...p, id: uid(), clienteId: v.clienteId, tipoNombre: tp ? tp.nombre : '', condiciones: v$('cond'),
+    nota: v$('nota') || ('Financiamiento de venta del ' + fmtF(v.fecha)), ventaId: v.id, creado: Date.now()};
+  await guardar('prestamos', nuevo);
+  await guardar('ventas', {...v, financiado: (v.financiado || 0) + sal, prestamoId: nuevo.id, vence: ''});
+  cerrar(); UI.tab = 'prestamos'; pintar(); aviso('Saldo financiado en un préstamo'); reciboPrestamo(nuevo.id);
 }
 async function anularVenta(id) {
   const v = S.ventas.find(x => x.id === id); if (!v) return;
+  if (v.prestamoId && S.prestamos.some(x => x.id === v.prestamoId)) return aviso('Esta venta tiene un préstamo ligado. Elimina primero ese préstamo y luego anula la venta.');
   for (const i of v.items) { const p = producto(i.pid); if (p) await guardar('productos', {...p, stock: p.stock + i.cant}); }
   for (const x of S.pagos.filter(x => x.tipo === 'venta' && x.refId === id)) await borrar('pagos', x.id);
   await borrar('ventas', id); aviso('Venta anulada y mercancía devuelta al inventario');
@@ -952,6 +1074,63 @@ async function saveTipo(id) {
 }
 
 /* ----- Ajustes del negocio (salen en los recibos) ----- */
+/* ----- PIN de acceso: se guarda solo un resumen (hash), nunca el PIN ----- */
+const PINK = 'mnad-pin', PINF = 'mnad-pin-f';
+const pinGet = () => { try { return JSON.parse(localStorage.getItem(PINK) || 'null'); } catch (e) { return null; } };
+async function hashPin(pin, salt) {
+  const txt = salt + ':' + pin;
+  try { if (window.crypto && crypto.subtle) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); } } catch (e) {}
+  let h = 2166136261; for (let i = 0; i < txt.length; i++) { h ^= txt.charCodeAt(i); h = Math.imul(h, 16777619); } return 'f' + (h >>> 0).toString(16);
+}
+let lockBuf = '', bgAt = 0;
+const fallos = () => { try { return JSON.parse(localStorage.getItem(PINF) || '{}') || {}; } catch (e) { return {}; } };
+function lockPintar(msg) {
+  const pn = pinGet(); $('#lock-dots').innerHTML = Array.from({length: pn ? pn.len : 4}, (_, i) => `<i class="${i < lockBuf.length ? 'on' : ''}"></i>`).join('');
+  if (msg !== undefined) $('#lock-msg').textContent = msg;
+}
+function bloquear() { if (!pinGet()) return; lockBuf = ''; $('#lock').hidden = false; lockPintar('Escribe tu PIN'); document.body.classList.remove('rec'); $('#modal').innerHTML = ''; }
+async function lockProbar() {
+  const pn = pinGet(); if (!pn || !lockBuf) return;
+  const f = fallos(), ahora = Date.now();
+  if (f.hasta && ahora < f.hasta) { lockBuf = ''; return lockPintar(`Demasiados intentos. Espera ${Math.ceil((f.hasta - ahora) / 1000)} s.`); }
+  if (await hashPin(lockBuf, pn.salt) === pn.hash) { try { localStorage.removeItem(PINF); } catch (e) {} lockBuf = ''; $('#lock').hidden = true; return; }
+  const n = (f.n || 0) + 1, extra = Math.floor(n / 5), nuevo = {n};
+  if (n % 5 === 0) nuevo.hasta = ahora + Math.min(600, 30 * Math.pow(2, extra - 1)) * 1000;
+  try { localStorage.setItem(PINF, JSON.stringify(nuevo)); } catch (e) {}
+  lockBuf = ''; lockPintar(nuevo.hasta ? 'Demasiados intentos. Espera un momento.' : 'PIN incorrecto');
+}
+function formPin(modo) {
+  const pn = pinGet(), nuevo = modo !== 'quitar';
+  abrir(`<h2>${modo === 'quitar' ? 'Quitar el PIN' : modo === 'cambiar' ? 'Cambiar el PIN' : 'Activar PIN'}</h2>
+    ${modo === 'activar' ? `<p class="small muted" style="margin:0 0 10px">El PIN protege la app: se pide al abrirla y cuando vuelves a ella después de un minuto. <b>Si lo olvidas</b> no hay forma de recuperarlo: tendrías que borrar los datos de la app y restaurar tu respaldo. Por eso conviene tener un respaldo reciente.</p>` : ''}
+    <div class="f">${pn ? fld('pin0', 'PIN actual', '', 'password', 'inputmode="numeric" maxlength="6" autocomplete="off"', 'full') : ''}
+    ${nuevo ? fld('pin1', 'PIN nuevo (4 a 6 números)', '', 'password', 'inputmode="numeric" maxlength="6" autocomplete="off"', 'full') + fld('pin2', 'Repite el PIN nuevo', '', 'password', 'inputmode="numeric" maxlength="6" autocomplete="off"', 'full') : ''}</div>
+    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-pin" data-modo="${modo}">${modo === 'quitar' ? 'Quitar PIN' : 'Guardar PIN'}</button></div>`);
+}
+async function savePin(modo) {
+  const pn = pinGet();
+  if (pn && await hashPin(v$('pin0'), pn.salt) !== pn.hash) return aviso('El PIN actual no es correcto.');
+  if (modo === 'quitar') { try { localStorage.removeItem(PINK); localStorage.removeItem(PINF); } catch (e) {} cerrar(); return aviso('PIN quitado'); }
+  const a = v$('pin1'), b = v$('pin2');
+  if (!/^\d{4,6}$/.test(a)) return aviso('El PIN debe tener de 4 a 6 números.');
+  if (a !== b) return aviso('Los dos PIN no son iguales.');
+  const salt = uid(); 
+  try { localStorage.setItem(PINK, JSON.stringify({salt, hash: await hashPin(a, salt), len: a.length})); localStorage.removeItem(PINF); } catch (e) { return aviso('No se pudo guardar el PIN.'); }
+  cerrar(); aviso('PIN guardado. Se pedirá al abrir la app.');
+}
+function iniciarBloqueo() {
+  $('#lock').addEventListener('click', e => {
+    const b = e.target.closest('[data-k]'); if (!b) return; const k = b.dataset.k, pn = pinGet(); if (!pn) return;
+    if (k === 'del') lockBuf = lockBuf.slice(0, -1); else if (k === 'ok') { lockProbar(); return; } else if (lockBuf.length < pn.len) lockBuf += k;
+    lockPintar(''); if (lockBuf.length === pn.len) lockProbar();
+  });
+  $('#lock-forgot').addEventListener('click', () => confirmar('¿Olvidaste tu PIN?', 'La única forma es borrar todos los datos de la app y entrar de nuevo vacía. Después puedes restaurar tu respaldo (.json). Si no tienes respaldo, esos datos se pierden.', 'Borrar todo y entrar', () => {
+    try { localStorage.clear(); } catch (e) {} location.reload(); }));
+  const fuera = () => { bgAt = Date.now(); }, dentro = () => { if (pinGet() && bgAt && Date.now() - bgAt > 60000) bloquear(); bgAt = 0; };
+  document.addEventListener('visibilitychange', () => document.hidden ? fuera() : dentro());
+  document.addEventListener('pause', fuera); document.addEventListener('resume', dentro);
+  bloquear();
+}
 function formAjustes() {
   const c = cfg();
   const area = (id, label, val, ph) => `<div class="full"><label for="f-${id}">${label}</label><textarea id="f-${id}" rows="3" placeholder="${esc(ph)}">${esc(val)}</textarea></div>`;
@@ -962,7 +1141,9 @@ function formAjustes() {
     <div class="full"><h3 style="font-size:15px;margin-top:6px">Cada recibo con su propio texto</h3><p class="small muted" style="margin:2px 0 0">Cambia el título y escribe las condiciones que quieras que salgan fijas en ese tipo de recibo.</p></div>
     ${RECS.map(([k, nombre, tit, ej]) => `<div class="full" style="border-top:1px solid var(--line);padding-top:10px"><b>${nombre}</b></div>
       ${fld('t-' + k, 'Título del recibo', (c.r && c.r[k] && c.r[k].titulo) || '', 'text', `placeholder="${esc(tit)}"`, 'full')}
-      ${area('x-' + k, 'Texto fijo (garantía, condiciones…)', (c.r && c.r[k] && c.r[k].texto) || '', ej)}`).join('')}</div>
+      ${area('x-' + k, 'Texto fijo (garantía, condiciones…)', (c.r && c.r[k] && c.r[k].texto) || '', ej)}`).join('')}
+    <div class="full" style="border-top:1px solid var(--line);padding-top:10px"><h3 style="font-size:15px;margin:0 0 4px">Seguridad</h3><p class="small muted" style="margin:0 0 8px">${pinGet() ? 'El PIN está activado.' : 'Protege la app con un PIN para que nadie vea tus clientes ni tus cobros.'}</p>
+      ${pinGet() ? '<button class="btn sm" data-act="pin-cambiar">Cambiar PIN</button> <button class="btn sm danger" data-act="pin-quitar">Quitar PIN</button>' : '<button class="btn sm pri" data-act="pin-activar">Activar PIN</button>'}</div></div>
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-ajustes">Guardar</button></div>`);
 }
 async function saveAjustes() {
@@ -998,60 +1179,77 @@ function reciboTxt(r) {
   return L.join('\n');
 }
 let RECIBO = null;
-function generarImagenRecibo() {
-  const el = document.querySelector('#modal .recibo');
-  if (!el) { aviso('No hay recibo para generar imagen.'); return; }
+/* Dibuja el recibo directamente en un lienzo (no se usa una "captura" de la página: el navegador la bloquea al exportar) */
+function dibujarRecibo(r) {
+  const c = cfg(), W = 380, P = 20, IW = W - 2 * P, K = 2, FONT = 'Arial, Helvetica, sans-serif';
+  const pasada = (ctx, dibuja) => {
+    let y = P;
+    const f = (px, bold) => { ctx.font = (bold ? '700 ' : '') + px + 'px ' + FONT; };
+    const partir = (txt, maxW) => { const out = [];
+      String(txt ?? '').split('\n').forEach(par => { let cur = ''; par.split(' ').forEach(w => { const t = cur ? cur + ' ' + w : w; if (cur && ctx.measureText(t).width > maxW) { out.push(cur); cur = w; } else cur = t; }); out.push(cur); });
+      return out; };
+    const centro = (txt, px, bold, color) => { f(px, bold); ctx.fillStyle = color; ctx.textAlign = 'center';
+      partir(txt, IW).forEach(l => { if (dibuja) ctx.fillText(l, W / 2, y); y += px + 4; }); };
+    const par = (izq, der, px, bold, color, sangria) => { f(px, bold); ctx.fillStyle = color; ctx.textBaseline = 'top';
+      const dw = ctx.measureText(der).width, li = partir(izq, IW - dw - 12 - (sangria || 0));
+      if (dibuja) { ctx.textAlign = 'right'; ctx.fillText(der, W - P, y); ctx.textAlign = 'left'; li.forEach((l, i) => ctx.fillText(l, P + (sangria || 0), y + i * (px + 4))); }
+      y += li.length * (px + 4); };
+    const sep = () => { y += 5; if (dibuja) { ctx.strokeStyle = '#9aa5b1'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(P, y); ctx.lineTo(W - P, y); ctx.stroke(); ctx.setLineDash([]); } y += 9; };
+    ctx.textBaseline = 'top';
+    centro(c.negocio || 'Mi Negocio', 18, true, '#111');
+    if (c.dir) centro(c.dir, 12, false, '#111');
+    if (c.tel) centro('Tel. ' + c.tel, 12, false, '#111');
+    y += 4; centro(String(r.titulo || '').toUpperCase(), 13, true, '#0E5A6B'); sep();
+    par('No.', String(r.no), 14, false, '#111'); par('Fecha', fmtF(r.fecha), 14, false, '#111'); par('Cliente', String(r.cliente), 14, false, '#111');
+    if (r.items && r.items.length) {
+      sep();
+      if (r.itemsTit) { f(12, true); ctx.fillStyle = '#111'; ctx.textAlign = 'left'; if (dibuja) ctx.fillText(r.itemsTit, P, y); y += 16; }
+      r.items.forEach(([l, v, sub]) => { par(l, v, 14, false, '#111'); if (sub) par(sub, '', 12, false, '#555', 0); });
+    }
+    sep(); r.lineas.forEach(([l, v]) => par(l, String(v), 14, false, '#111'));
+    if (r.total) { sep(); par(r.total[0], r.total[1], 16, true, '#111'); }
+    if (r.texto) { sep(); par(r.texto, '', 12, false, '#111'); }
+    if (r.firma) { y += 30; if (dibuja) { ctx.strokeStyle = '#111'; ctx.beginPath(); ctx.moveTo(P, y); ctx.lineTo(P + IW / 2 - 9, y); ctx.moveTo(P + IW / 2 + 9, y); ctx.lineTo(W - P, y); ctx.stroke(); }
+      y += 4; f(12, false); ctx.fillStyle = '#111'; ctx.textAlign = 'center'; if (dibuja) { ctx.fillText('Cliente', P + IW / 4 - 4, y); ctx.fillText('Prestamista', P + IW * 3 / 4 + 4, y); } y += 16; }
+    if (c.pie) { y += 8; centro(c.pie, 12, false, '#555'); }
+    return y + P;
+  };
+  const H = Math.ceil(pasada(document.createElement('canvas').getContext('2d'), false));
+  const cv = document.createElement('canvas'); cv.width = W * K; cv.height = H * K;
+  const ctx = cv.getContext('2d'); ctx.scale(K, K);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+  pasada(ctx, true);
+  return cv;
+}
+async function generarImagenRecibo() {
+  if (!RECIBO || !RECIBO.datos) { aviso('No hay recibo para generar imagen.'); return; }
   try {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    const data = `<svg xmlns="http://www.w3.org/2000/svg" width="${el.offsetWidth}" height="${el.offsetHeight}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(el)}</foreignObject></svg>`;
-    const svgBlob = new Blob([data], {type: 'image/svg+xml;charset=utf-8'});
-    const url = URL.createObjectURL(svgBlob);
-    const img = new Image();
-    img.onload = function() {
-      const canvas = document.createElement('canvas');
-      canvas.width = el.offsetWidth * 2;
-      canvas.height = el.offsetHeight * 2;
-      const ctx = canvas.getContext('2d');
-      ctx.scale(2, 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, el.offsetWidth, el.offsetHeight);
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob(function(blob) {
-        if (!blob) { aviso('No se pudo generar la imagen.'); return; }
-        const nombre = `recibo-${(RECIBO && RECIBO.titulo ? RECIBO.titulo.replace(/[^a-z0-9]/gi,'-').toLowerCase() : 'recibo')}-${Date.now()}.png`;
-        if (NATIVO()) { guardarNativo(blob, nombre); URL.revokeObjectURL(url); return; }
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = nombre;
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); URL.revokeObjectURL(url); }, 1500);
-        aviso('Imagen PNG descargada');
-        if (navigator.canShare && navigator.canShare({files: [new File([blob], nombre, {type: 'image/png'})]})) {
-          try {
-            navigator.share({files: [new File([blob], nombre, {type: 'image/png'})], title: RECIBO ? RECIBO.titulo : 'Recibo'});
-          } catch(e) {}
-        }
-      }, 'image/png');
-    };
-    img.onerror = function() { aviso('Error al generar imagen.'); URL.revokeObjectURL(url); };
-    img.src = url;
-  } catch(e) {
-    aviso('No se pudo generar la imagen PNG.');
+    const blob = await new Promise(ok => dibujarRecibo(RECIBO.datos).toBlob(ok, 'image/png'));
+    if (!blob) throw new Error('sin imagen');
+    const nombre = `recibo-${(RECIBO.titulo ? RECIBO.titulo.replace(/[^a-z0-9]/gi, '-').toLowerCase() : 'recibo')}-${Date.now()}.png`;
+    if (NATIVO()) { await guardarNativo(blob, nombre); return; }
+    const f = new File([blob], nombre, {type: 'image/png'});
+    if (navigator.canShare && navigator.canShare({files: [f]})) {
+      try { await navigator.share({files: [f], title: RECIBO.titulo}); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    descargar(blob, nombre); aviso('Imagen PNG descargada');
+  } catch (e) {
+    aviso('No se pudo generar la foto. Usa "Copiar texto" o "WhatsApp".');
   }
 }
 
 function mostrarRecibo(r, tel) {
-  RECIBO = {txt: reciboTxt(r), titulo: r.titulo};
+  RECIBO = {txt: reciboTxt(r), titulo: r.titulo, datos: r};
   abrir(`${reciboHTML(r)}<div class="foot noprint"><button class="btn" data-act="cerrar">Cerrar</button><button class="btn" data-act="rec-copiar">Copiar texto</button>
-    <a class="btn" target="_blank" rel="noopener" href="https://wa.me/${telWa(tel)}?text=${encodeURIComponent(RECIBO.txt)}">WhatsApp</a><button class="btn" data-act="rec-imagen">Guardar como PNG</button><button class="btn pri" data-act="rec-imprimir">Imprimir / PDF</button></div>`);
+    <a class="btn" target="_blank" rel="noopener" href="https://wa.me/${telWa(tel)}?text=${encodeURIComponent(RECIBO.txt)}">WhatsApp</a><button class="btn pri" data-act="rec-imagen">Enviar como foto</button>${ES_APP ? '' : '<button class="btn" data-act="rec-imprimir">Imprimir / PDF</button>'}</div>`);
   document.body.classList.add('rec');
 }
 function reciboVenta(id) {
   const v = S.ventas.find(x => x.id === id); if (!v) return;
   const cli = cliente(v.clienteId) || {}, cred = Math.round((v.total - v.pagado0) * 100) / 100;
   const lineas = [['Cobrado al momento', money(v.pagado0)]];
-  if (cred > 0) { lineas.push(['Queda a crédito', money(cred)]); if (v.vence) lineas.push(['Fecha de pago', fmtF(v.vence)]); }
+  if (cred > 0) { lineas.push(['Queda a crédito', money(cred)]); if (v.vence && !v.financiado) lineas.push(['Fecha de pago', fmtF(v.vence)]); }
+  if (v.financiado > 0) lineas.push(['Financiado en préstamo', money(v.financiado)]);
   if (v.garantia) lineas.push(['Garantía', v.garantia]);
   mostrarRecibo({titulo: recCfg('venta').titulo, texto: recCfg('venta').texto, no: 'V-' + corto(v.id), fecha: v.fecha, cliente: cli.nombre || 'Cliente general',
     itemsTit: 'Productos', items: v.items.map(i => [`${i.cant} × ${i.nombre} (${money(i.precio)})`, money(i.cant * i.precio), i.garantia ? 'Garantía: ' + i.garantia : '']), lineas, total: ['TOTAL', money(v.total)]}, cli.tel);
@@ -1063,6 +1261,7 @@ function reciboPrestamo(id) {
   if (p.tipoNombre) lineas.push(['Tipo', p.tipoNombre]);
   lineas.push(['Monto prestado', money(p.capital)], [`Interés ${p.tasa}% ${p.base === 'mensual' ? 'por mes' : 'total'}`, money(d.interes)],
     ['Forma de pago', `${p.cuotas} cuotas ${FREQ_P[p.freq]} de ${money(d.vc)}`]);
+  if (p.ventaId) { const vo = S.ventas.find(x => x.id === p.ventaId); if (vo) lineas.unshift(['Origen', 'Financiamiento de venta del ' + fmtF(vo.fecha)]); }
   if (p.mora > 0) lineas.push(['Cargo por atraso', `${p.mora}% de la cuota por día`]);
   mostrarRecibo({titulo: recCfg('prestamo').titulo, texto: [recCfg('prestamo').texto, p.condiciones].filter(Boolean).join('\n\n'), no: 'PR-' + corto(p.id), fecha: p.inicio, cliente: cli.nombre || 'Sin cliente',
     itemsTit: 'Calendario de pagos', items: d.cuotas.map(c => [`Cuota ${c.n} · ${fmtF(c.vence)}`, money(c.monto)]), lineas, total: ['TOTAL A PAGAR', money(d.total)], firma: true}, cli.tel);
@@ -1074,7 +1273,7 @@ function reciboPago(id) {
   if (x.tipo === 'prestamo') {
     const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p);
     const pagadoAl = S.pagos.filter(y => y.tipo === 'prestamo' && y.refId === p.id && antes(y)).reduce((a, y) => a + y.monto, 0);
-    const hechas = Math.min(p.cuotas, Math.floor((pagadoAl + 0.005) / d.vc));
+    const hechas = Math.min(p.cuotas, Math.floor((pagadoAl + TOL) / d.vc));
     lineas = [['Concepto', 'Pago de cuota'], ['Préstamo', money(p.capital)], ['Cuotas completas pagadas', `${hechas} de ${p.cuotas}`], ['Saldo pendiente', money(Math.max(0, d.total - pagadoAl))]];
   } else if (x.tipo === 'mora') {
     const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p);
@@ -1111,7 +1310,7 @@ function vReportes() {
   const cuotas = pg.filter(x => x.tipo === 'prestamo').reduce((a, x) => a + x.monto, 0);
   const moraCob = pg.filter(x => x.tipo === 'mora').reduce((a, x) => a + x.monto, 0);
   const interesCob = pg.filter(x => x.tipo === 'prestamo').reduce((a, x) => { const p = S.prestamos.find(y => y.id === x.refId); if (!p) return a; const t = totalPrestamo(p); return a + (t > 0 ? x.monto * interesTotal(p) / t : 0); }, 0);
-  const prs = S.prestamos.filter(p => en(p.inicio)), prestado = prs.reduce((a, p) => a + p.capital, 0);
+  const prs = S.prestamos.filter(p => en(p.inicio) && !p.ventaId), prestado = prs.reduce((a, p) => a + p.capital, 0);
   const gs = S.gastos.filter(g => en(g.fecha)), gastos = gs.reduce((a, g) => a + g.monto, 0);
   const compras = gs.filter(g => g.cat === 'Compra de mercancía').reduce((a, g) => a + g.monto, 0);
   const porCat = {}; gs.forEach(g => { const k = g.cat || 'Otros'; porCat[k] = (porCat[k] || 0) + g.monto; });
@@ -1178,8 +1377,8 @@ function hojasRespaldo() {
   const prestamos = [['Cliente', 'Tipo', 'Fecha', 'Capital', 'Interés %', 'Se aplica', 'Cuotas', 'Pagos', 'Valor cuota', 'Interés RD$', 'Total', 'Pagado', 'Saldo', 'Días de atraso', 'Mora generada', 'Mora cobrada', 'Mora pendiente', 'Estado'],
     ...S.prestamos.map(p => { const d = detalle(p); return [nombreCli(p.clienteId), p.tipoNombre || '', p.inicio, M(p.capital), p.tasa, p.base === 'mensual' ? 'Cada mes' : 'Una vez', p.cuotas, FREQ_N[p.freq], M(d.vc), M(d.interes), M(d.total), M(d.pagado), M(d.saldo), d.atrasoMax, M(d.mora), M(d.moraCobrada), M(d.moraPend), estadoPrestamo(p).txt]; })];
   const pagos = [['Fecha', 'Cliente', 'Concepto', 'Monto', 'Nota'], ...[...S.pagos].sort((a, b) => a.fecha < b.fecha ? -1 : 1).map(x => [x.fecha, nombreCli(x.clienteId), TIPO_PAGO[x.tipo] || x.tipo, M(x.monto), x.nota || ''])];
-  const ventas = [['Fecha', 'Cliente', 'Productos', 'Total', 'Cobrado al vender', 'Abonos', 'Saldo', 'Fecha de pago'],
-    ...[...S.ventas].sort((a, b) => a.fecha < b.fecha ? -1 : 1).map(v => [v.fecha, nombreCli(v.clienteId), v.items.map(i => `${i.cant} ${i.nombre}`).join(', '), M(v.total), M(v.pagado0), M(ventaPagado(v) - v.pagado0), M(ventaSaldo(v)), v.vence || ''])];
+  const ventas = [['Fecha', 'Cliente', 'Productos', 'Total', 'Cobrado al vender', 'Abonos', 'Saldo', 'Fecha de pago', 'Financiado en préstamo'],
+    ...[...S.ventas].sort((a, b) => a.fecha < b.fecha ? -1 : 1).map(v => [v.fecha, nombreCli(v.clienteId), v.items.map(i => `${i.cant} ${i.nombre}`).join(', '), M(v.total), M(v.pagado0), M(ventaPagado(v) - v.pagado0), M(ventaSaldo(v)), v.vence || '', M(v.financiado || 0)])];
   const inventario = [['Producto', 'Categoría', 'Unidad', 'Costo', 'Precio', 'Cantidad', 'Aviso en', 'Margen %', 'Garantía'],
     ...S.productos.map(p => [p.nombre, p.cat || '', p.unidad || '', M(p.costo || 0), M(p.precio), p.stock, p.minimo || 0, p.precio > 0 ? Math.round((p.precio - (p.costo || 0)) / p.precio * 100) : 0, p.garantia || ''])];
   const gastos = [['Fecha', 'Concepto', 'Tipo', 'Monto'], ...[...S.gastos].sort((a, b) => a.fecha < b.fecha ? -1 : 1).map(g => [g.fecha, g.concepto, g.cat || '', M(g.monto)])];
@@ -1222,7 +1421,17 @@ function formRespaldo() {
       <div class="acts"><label class="btn sm" for="f-restore" style="cursor:pointer">Elegir archivo</label><input id="f-restore" type="file" accept=".json,application/json" style="display:none"></div></div>
   </div>
   <p class="small muted">Con el botón <b>Compartir</b> eliges Drive, WhatsApp o correo desde tu teléfono. En computadora usa Descargar y sube el archivo a Drive.</p>
+  ${infoRespaldo()}
   <div class="foot"><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
+}
+function infoRespaldo() {
+  const m = meta(), dias = m.ult ? diffDias(hoy(), m.ult) : null;
+  const ult = dias === null ? 'Aún no has hecho ninguno.' : dias === 0 ? 'Hoy.' : `Hace ${dias} ${dias === 1 ? 'día' : 'días'}.`;
+  const l = copiasLeer().map((c, i) => ({...c, i})).filter(c => c.t === 'antes' || c.f).sort((a, b) => (a.t === 'antes') - (b.t === 'antes') || (a.f < b.f ? 1 : -1));
+  return `<p class="small" style="margin:10px 0 0"><b>Último respaldo guardado fuera de la app:</b> ${ult} La app te lo recordará cada semana.</p>
+  ${DB ? '' : `<h3 style="font-size:15px;margin:14px 0 4px">Copias automáticas en este teléfono</h3>
+  <p class="small muted" style="margin:0 0 6px">La app guarda sola una copia al empezar cada día (los últimos 7). Sirven para deshacer un error, pero <b>si desinstalas la app se pierden</b>: no reemplazan el respaldo de arriba.</p>
+  <div class="panel">${l.length ? l.map(c => `<div class="row"><div class="main"><div class="t">${c.t === 'antes' ? 'Antes de la última restauración' : fmtF(c.f)}</div></div><div class="acts"><button class="btn sm" data-act="copia-restaurar" data-i="${c.i}">Volver a esta</button></div></div>`).join('') : '<div class="empty small">Todavía no hay copias. Se crean al abrir la app con datos.</div>'}</div>`}`;
 }
 function copiaProfundaS() {
   try {
@@ -1385,16 +1594,17 @@ const ACT = {
   'nuevo-cliente': () => formCliente(), 'edit-cliente': el => formCliente(el.dataset.id), 'ver-cliente': el => verCliente(el.dataset.id),
   'save-cliente': el => saveCliente(el.dataset.id),
   'nuevo-prestamo': el => formPrestamo(el.dataset.cli), 'save-prestamo': () => savePrestamo(), 'ver-prestamo': el => verPrestamo(el.dataset.id),
-  cobrar: el => formCobro(el.dataset.kind, el.dataset.id),
+  cobrar: el => formCobro(el.dataset.kind, el.dataset.id), financiar: el => formFinanciar(el.dataset.id), 'save-financiar': el => saveFinanciar(el.dataset.id),
   'save-cobro': el => saveCobro(el.dataset.kind, el.dataset.id),
   tipos: () => formTipos(), 'nuevo-tipo': () => formTipo(), 'edit-tipo': el => formTipo(el.dataset.id), 'save-tipo': el => saveTipo(el.dataset.id),
   'del-tipo': async el => { await borrar('tipos', el.dataset.id); formTipos(); },
   ajustes: () => formAjustes(), 'save-ajustes': () => saveAjustes(),
-  respaldo: () => formRespaldo(),
+  'pin-activar': () => formPin('activar'), 'pin-cambiar': () => formPin('cambiar'), 'pin-quitar': () => formPin('quitar'), 'save-pin': el => savePin(el.dataset.modo),
+  respaldo: () => formRespaldo(), 'respaldo-luego': () => { metaSet({pospuesto: hoy()}); pintar(); }, 'copia-restaurar': el => restaurarCopia(+el.dataset.i),
   'bk-xlsx': () => descargar(construirXlsx(), `respaldo-${hoy()}.xlsx`),
   'bk-xlsx-share': () => compartir(construirXlsx(), `respaldo-${hoy()}.xlsx`),
-  'bk-json': () => descargar(respaldoJson(), `respaldo-${hoy()}.json`),
-  'bk-json-share': () => compartir(respaldoJson(), `respaldo-${hoy()}.json`),
+  'bk-json': () => { descargar(respaldoJson(), `respaldo-${hoy()}.json`); marcarRespaldo(); },
+  'bk-json-share': () => { compartir(respaldoJson(), `respaldo-${hoy()}.json`); marcarRespaldo(); },
   rango: el => rangoRapido(el.dataset.k), imprimir: () => imprimirVista(),
   'recibo-venta': el => reciboVenta(el.dataset.id), 'recibo-prestamo': el => reciboPrestamo(el.dataset.id), 'recibo-pago': el => reciboPago(el.dataset.id),
   'rec-imprimir': () => NATIVO() ? generarImagenRecibo() : window.print(),
@@ -1406,7 +1616,7 @@ const ACT = {
   'nuevo-gasto': () => formGasto(), 'save-gasto': () => saveGasto(),
   'nuevo-producto': () => formProducto(), 'edit-producto': el => formProducto(el.dataset.id), 'save-producto': el => saveProducto(el.dataset.id),
   entrada: el => formEntrada(el.dataset.id), 'save-entrada': () => saveEntrada(),
-  'del-prestamo': async el => { for (const x of S.pagos.filter(x => (x.tipo === 'prestamo' || x.tipo === 'mora') && x.refId === el.dataset.id)) await borrar('pagos', x.id); await borrar('prestamos', el.dataset.id); cerrar(); aviso('Préstamo eliminado'); },
+  'del-prestamo': async el => { const p0 = S.prestamos.find(x => x.id === el.dataset.id); for (const x of S.pagos.filter(x => (x.tipo === 'prestamo' || x.tipo === 'mora') && x.refId === el.dataset.id)) await borrar('pagos', x.id); await borrar('prestamos', el.dataset.id); const v0 = p0 && p0.ventaId && S.ventas.find(x => x.id === p0.ventaId); if (v0) await guardar('ventas', {...v0, financiado: 0, prestamoId: ''}); cerrar(); aviso(v0 ? 'Préstamo eliminado. La venta volvió a quedar a crédito.' : 'Préstamo eliminado'); },
   'del-cliente': async el => { const id = el.dataset.id;
     if (S.prestamos.some(p => p.clienteId === id) || S.ventas.some(v => v.clienteId === id)) return aviso('Este cliente tiene préstamos o ventas. Elimínalos primero.');
     await borrar('clientes', id); cerrar(); aviso('Cliente eliminado'); },
@@ -1451,7 +1661,7 @@ async function arrancar() {
   $('#view').innerHTML = '<div class="panel"><div class="empty">Cargando tus datos…</div></div>';
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
-  if (!db) { lsLoad(); marcaSync(false); pintar(); return; }
+  if (!db) { lsLoad(); copiaDelDia(); marcaSync(false); pintar(); return; }
   DB = db; marcaSync(true);
   const listos = new Set(); let pintado = false;
   const mostrar = () => { pintado = true; pintar(); };
@@ -1463,6 +1673,7 @@ async function arrancar() {
   }, err => { if (err && err.code === 'revoked') { DB = null; marcaSync(false); } }));
 }
 pintar = (orig => function () { try { orig(); } catch (e) { console.error(e); } })(pintar);
+iniciarBloqueo();
 if (ES_APP) document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[target="_blank"]'); if (a && a.href) { e.preventDefault(); location.href = a.href; } }, true);
 arrancar();
 /* Sin internet: guarda la app en el equipo y pide que el navegador no borre los datos */
