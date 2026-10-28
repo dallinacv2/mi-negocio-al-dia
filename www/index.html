@@ -36,10 +36,10 @@ body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);margin:0}
 .brand{font:700 20px var(--f-display);letter-spacing:-.02em;color:#fff}
 .brand-sub{font-size:12px;opacity:.9;margin-top:2px}
 .sidebar-nav{display:flex;flex-direction:column;gap:4px;padding:12px 10px;overflow:auto}
-.sidebar-nav button{display:flex;align-items:center;gap:10px;text-align:left;background:none;border:0;border-radius:10px;padding:10px 12px;font-weight:500;color:var(--ink);cursor:pointer}
+.sidebar-nav button{display:flex;align-items:center;gap:12px;text-align:left;background:none;border:0;border-radius:12px;padding:14px 15px;font-size:16px;font-weight:500;color:var(--ink);cursor:pointer}
 .sidebar-nav button:hover{background:var(--accent-soft)}
 .sidebar-nav button[aria-selected="true"]{background:linear-gradient(90deg,rgba(14,90,107,.12) 0%,transparent 100%);color:var(--accent);font-weight:600}
-.sidebar-nav .nav-ico{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center}
+.sidebar-nav .nav-ico{width:22px;height:22px;font-size:19px;display:inline-flex;align-items:center;justify-content:center}
 .sidebar-nav .badge{margin-left:auto}
 .main-area{display:flex;flex-direction:column;min-width:0}
 .topbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:14px 22px;background:var(--surface);border-bottom:1px solid var(--line);box-shadow:0 1px 2px rgba(15,22,28,.02)}
@@ -285,9 +285,68 @@ async function guardarNativo(blob, nombre) {
 }
 const LS = 'mnad-v1';
 function lsLoad() { try { const j = JSON.parse(localStorage.getItem(LS) || '{}'); COLS.forEach(c => S[c] = j[c] || []); } catch (e) {} }
-function lsSave() {
-  try { localStorage.setItem(LS, JSON.stringify(S)); return true; }
-  catch (e) { aviso('⚠ No se pudo guardar en el teléfono (¿sin espacio?). Haz un respaldo ahora.'); return false; }
+async function lsSave() {
+  let okls = true;
+  try { localStorage.setItem(LS, JSON.stringify(S)); }
+  catch (e) { okls = false; aviso('⚠ No se pudo guardar en el teléfono (¿sin espacio?). Haz un respaldo ahora.'); }
+  /* Si la base local de IndexedDB está activa, replica este listado ahí (usado por restauraciones que ya dejaron S en memoria) */
+  if (DB && DB.local) { try { await DB.replicar(S); } catch (e) {} }
+  return okls;
+}
+
+/* ----- base local en IndexedDB: misma interfaz que la base compartida (coleccion.doc.set / onSnapshot) para aguantar mucho más que el límite del navegador y dejar el camino listo para la nube ----- */
+let LOCAL_PROM = null;
+function crearLocalDB() {
+  if (LOCAL_PROM) return LOCAL_PROM;
+  LOCAL_PROM = (async () => {
+    let db = null;
+    try {
+      if (!window.indexedDB) return null;
+      const rq = indexedDB.open('mnad-local-v1', 1);
+      rq.onupgradeneeded = () => { const d = rq.result; COLS.forEach(c => { if (!d.objectStoreNames.contains(c)) d.createObjectStore(c); }); };
+      db = await new Promise((ok, ko) => { rq.onsuccess = () => ok(rq.result); rq.onerror = () => ko(rq.error); setTimeout(() => ko(new Error('la base local no abrió a tiempo')), 6000); });
+    } catch (e) { return null; }
+    const oyentes = {};
+    const snap = docs => ({ docs: docs.map(o => ({ id: o.id, data: () => o })) });
+    const leer = col => new Promise((ok, ko) => {
+      try { const r = db.transaction(col).objectStore(col).getAll(); r.onsuccess = () => ok((r.result || []).filter(x => x && x.id)); r.onerror = () => ko(r.error); } catch (e) { ko(e); }
+    });
+    const emitir = async col => {
+      const oys = oyentes[col]; if (!oys || !oys.length) return;
+      try { const s = snap(await leer(col)); oys.forEach(cb => { try { cb(s); } catch (e) {} }); }
+      catch (e) { oys.forEach(cb => { try { cb(null, { code: 'local' }); } catch (x) {} }); }
+    };
+    /* Importa una sola vez: si IndexedDB está vacío y este navegador ya tenía datos, los lleva a la base local */
+    try {
+      const vacias = (await Promise.all(COLS.map(leer))).every(l => !l.length);
+      const j = (() => { try { return JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) { return null; } })();
+      if (vacias && j) await Promise.all(COLS.map(async c => {
+        const l = Array.isArray(j[c]) ? j[c].filter(x => x && x.id) : []; if (!l.length) return;
+        await new Promise((ok, ko) => { try { const t = db.transaction(c, 'readwrite'); const s = t.objectStore(c); l.forEach(o => s.put(o, o.id)); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } });
+      }));
+    } catch (e) {}
+    return {
+      local: true,
+      /* Sobrescribe cada colección con el listado dado (usado al restaurar copias o respaldos completos) */
+      async replicar(listado) {
+        for (const c of COLS) {
+          const l = Array.isArray(listado[c]) ? listado[c].filter(x => x && x.id) : [];
+          await new Promise((ok, ko) => { try { const t = db.transaction(c, 'readwrite'); const s = t.objectStore(c); s.clear(); l.forEach(o => s.put(o, o.id)); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } });
+        }
+        await Promise.all(COLS.map(c => emitir(c)));
+      },
+      collection(col) {
+        return {
+          doc(id) { return {
+            set: async o => { await new Promise((ok, ko) => { try { const t = db.transaction(col, 'readwrite'); t.objectStore(col).put(o, id); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } }); emitir(col); },
+            delete: async () => { await new Promise((ok, ko) => { try { const t = db.transaction(col, 'readwrite'); t.objectStore(col).delete(id); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } }); emitir(col); }
+          }; },
+          onSnapshot(cb, err) { (oyentes[col] = oyentes[col] || []).push(cb); leer(col).then(docs => cb(snap(docs))).catch(e => { if (err) err({ code: 'local' }); }); }
+        };
+      }
+    };
+  })();
+  return LOCAL_PROM;
 }
 
 /* ----- respaldos: recordatorio, contador de cambios y copias automáticas del teléfono ----- */
@@ -319,14 +378,14 @@ function copiasGuardar(l) {
 }
 /* Una copia al empezar cada día (últimos 7 días): sirve para deshacer errores. No reemplaza el respaldo fuera del teléfono. */
 function copiaDelDia() {
-  if (DB || !DATA_COLS.some(c => S[c].length)) return;
+  if ((DB && !DB.local) || !DATA_COLS.some(c => S[c].length)) return;
   const f = hoy(), l = copiasLeer(); if (l.some(x => x.t === 'dia' && x.f === f)) return;
   const d = JSON.stringify(S); if (d.length > 1500000) return;
   const dias = l.filter(x => x.t === 'dia'); dias.push({t: 'dia', f, d}); dias.sort((a, b) => a.f < b.f ? -1 : 1);
   copiasGuardar([...l.filter(x => x.t === 'antes'), ...dias.slice(-7)]);
 }
 function copiaAntes() {
-  if (DB) return; const d = JSON.stringify(S); if (d.length > 1500000) return;
+  if (DB && !DB.local) return; const d = JSON.stringify(S); if (d.length > 1500000) return;
   copiasGuardar([...copiasLeer().filter(x => x.t === 'dia'), {t: 'antes', f: hoy(), d}]);
 }
 function respaldoActualAntesRestaurar() { copiaAntes(); }
@@ -1429,7 +1488,7 @@ function infoRespaldo() {
   const ult = dias === null ? 'Aún no has hecho ninguno.' : dias === 0 ? 'Hoy.' : `Hace ${dias} ${dias === 1 ? 'día' : 'días'}.`;
   const l = copiasLeer().map((c, i) => ({...c, i})).filter(c => c.t === 'antes' || c.f).sort((a, b) => (a.t === 'antes') - (b.t === 'antes') || (a.f < b.f ? 1 : -1));
   return `<p class="small" style="margin:10px 0 0"><b>Último respaldo guardado fuera de la app:</b> ${ult} La app te lo recordará cada semana.</p>
-  ${DB ? '' : `<h3 style="font-size:15px;margin:14px 0 4px">Copias automáticas en este teléfono</h3>
+  ${(DB && !DB.local) ? '' : `<h3 style="font-size:15px;margin:14px 0 4px">Copias automáticas en este teléfono</h3>
   <p class="small muted" style="margin:0 0 6px">La app guarda sola una copia al empezar cada día (los últimos 7). Sirven para deshacer un error, pero <b>si desinstalas la app se pierden</b>: no reemplazan el respaldo de arriba.</p>
   <div class="panel">${l.length ? l.map(c => `<div class="row"><div class="main"><div class="t">${c.t === 'antes' ? 'Antes de la última restauración' : fmtF(c.f)}</div></div><div class="acts"><button class="btn sm" data-act="copia-restaurar" data-i="${c.i}">Volver a esta</button></div></div>`).join('') : '<div class="empty small">Todavía no hay copias. Se crean al abrir la app con datos.</div>'}</div>`}`;
 }
@@ -1661,8 +1720,9 @@ async function arrancar() {
   $('#view').innerHTML = '<div class="panel"><div class="empty">Cargando tus datos…</div></div>';
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
+  if (!db) db = await crearLocalDB();
   if (!db) { lsLoad(); copiaDelDia(); marcaSync(false); pintar(); return; }
-  DB = db; marcaSync(true);
+  DB = db; marcaSync(!db.local);
   const listos = new Set(); let pintado = false;
   const mostrar = () => { pintado = true; pintar(); };
   setTimeout(() => { if (!pintado) mostrar(); }, 4000);
