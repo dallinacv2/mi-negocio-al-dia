@@ -349,6 +349,143 @@ function crearLocalDB() {
   return LOCAL_PROM;
 }
 
+/* ----- nube: Supabase para varios negocios aislados (tú + esposa comparten; cada amigo su propio) ----- */
+const NBK = 'mnad-nube', NBK_S = 'mnad-nube-sesion', NBK_NG = 'mnad-nube-negocio', NBK_PEND = 'mnad-nube-pend';
+/* La base por defecto va incluida en la app (la protege el RLS del servidor). Puede cambiarse en "Opción avanzada". */
+const NUBE_DE_FABRICA = { url: 'https://zjszzzpentkzijphyskm.supabase.co', key: 'sb_publishable_Q9GNwYdkPbauZOeU9wUa0A_6Shbr5Er' };
+const DIAS_SIN_SESION_PARA_BLOQUEAR = 30;
+const NUBE_FECHA_ULTIMA = 'mnad-sesion-ultimo';
+const nbCfg = () => { try { const j = JSON.parse(localStorage.getItem(NBK) || 'null'); return (j && j.url && j.key) ? j : NUBE_DE_FABRICA; } catch (e) { return NUBE_DE_FABRICA; } };
+const nbCta = () => { try { return JSON.parse(localStorage.getItem(NBK_S) || 'null'); } catch (e) { return null; } };
+const nbNeg = () => { try { return JSON.parse(localStorage.getItem(NBK_NG) || 'null'); } catch (e) { return null; } };
+const nbSet = (k, v) => { try { if (v) localStorage.setItem(k, JSON.stringify(v)); else localStorage.removeItem(k); } catch (e) {} };
+const nbBase = url => String(url).replace(/\/+$/, '');
+function sbApi(cfg, path, o = {}, token) {
+  const opts = { ...o, method: o.method || (o.body ? 'POST' : 'GET') };
+  return fetch(nbBase(cfg.url) + path, { ...opts, headers: { apikey: cfg.key, 'Content-Type': 'application/json', ...(o.headers || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) } }).then(async r => {
+    const txt = await r.text();
+    let m = txt; try { const j = JSON.parse(txt); m = j.message || j.error_description || j.msg || txt; } catch (e2) {}
+    if (!r.ok) throw new Error(String(m || 'HTTP ' + r.status));
+    let out = null; try { out = txt ? JSON.parse(txt) : null; } catch (e3) { out = txt; }
+    return out;
+  });
+}
+const sbEntrar = (cfg, email, pass) => sbApi(cfg, '/auth/v1/token?grant_type=password', { body: JSON.stringify({ email: String(email).trim(), password: pass }) }).then(s => ({ access: s.access_token, refresh: s.refresh_token, uid: s.user && s.user.id }));
+const sbCrear = (cfg, email, pass) => sbApi(cfg, '/auth/v1/signup', { body: JSON.stringify({ email: String(email).trim(), password: pass }) }).then(s => {
+  if (!s || !s.access_token) { const err = (s && s.message) || 'Revisa tu correo: confirma el registro y luego toca Entrar.'; throw new Error(err); }
+  return { access: s.access_token, refresh: s.refresh_token, uid: s.user && s.user.id };
+});
+const sbRefrescar = (cfg, refresh) => sbApi(cfg, '/auth/v1/token?grant_type=refresh_token', { body: JSON.stringify({ refresh_token: refresh }) }).then(s => ({ access: s.access_token, refresh: s.refresh_token, uid: '' }));
+/* Cola de operaciones pendientes (cuando no había internet al guardar en la nube) */
+const pendLeer = () => { try { const l = JSON.parse(localStorage.getItem(NBK_PEND) || '[]'); return Array.isArray(l) ? l : []; } catch (e) { return []; } };
+const pendGuardar = l => nbSet(NBK_PEND, l.slice(-400));
+function pendAdd(op) { const l = pendLeer(); l.push(op); pendGuardar(l); }
+async function crearSupabaseDB(cfg, sesion, neg) {
+  const token = sesion.access, negId = neg.id;
+  const conocer = {};                            /* id de registro -> updated_at remoto conocido */
+  const oyentes = {};                            /* tipo -> [callback] */
+  let vivo = true;
+  const negocioFila = await sbApi(cfg, '/rest/v1/negocio?id=eq.' + negId + '&select=codigo,nombre', {}, token).then(a => (a && a[0]) || null);
+  if (!negocioFila) { nbSet(NBK_NG, null); throw new Error('Ya no tienes acceso a ese negocio.'); }
+  nbSet(NBK_NG, { id: negId, nombre: negocioFila.nombre || neg.nombre || '', codigo: negocioFila.codigo });
+  const snapDe = col => ({ docs: (S[col] || []).map(o => ({ id: o.id, data: () => o })) });
+  const emitir = col => (oyentes[col] || []).forEach(cb => { try { cb(snapDe(col)); } catch (e) {} });
+  /* Trae lo remoto y lo une con lo local: por registro gana el último cambio; los borrados ajenos también bajan */
+  const mezclar = async primero => {
+    const rows = await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&select=id,tipo,datos,updated_at', {}, token);
+    const remotos = new Map(), colsTocadas = new Set();
+    (rows || []).forEach(r => { const k = r.tipo + '::' + r.id; remotos.set(k, r); if (conocer[k] === undefined || String(r.updated_at) > String(conocer[k])) { conocer[k] = r.updated_at; colsTocadas.add(r.tipo); } });
+    Object.keys(conocer).forEach(k => { if (!remotos.has(k) && !primero) { const [t, id] = k.split('::'); const i = S[t] ? S[t].findIndex(x => x.id === id) : -1; if (i >= 0) { S[t].splice(i, 1); colsTocadas.add(t); } delete conocer[k]; } });
+    colsTocadas.forEach(t => { if (!DATA_COLS.includes(t) && t !== 'tipos' && t !== 'ajustes') colsTocadas.delete(t); });
+    colsTocadas.forEach(emitir);
+  };
+  const subirRow = async (tipo, o) => {
+    if (!o || !o.id) return;
+    const r = await sbApi(cfg, '/rest/v1/registro?on_conflict=negocio_id,tipo,id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([{ negocio_id: negId, tipo, id: o.id, datos: o }]) }, token);
+    const fila = (r && r[0] && r[0].updated_at) || new Date().toISOString();
+    conocer[tipo + '::' + o.id] = fila;
+  };
+  const borrarRow = async (tipo, id) => { await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&tipo=eq.' + encodeURIComponent(tipo) + '&id=eq.' + encodeURIComponent(id), { method: 'DELETE' }, token); delete conocer[tipo + '::' + id]; };
+  /* Purga la cola de pendientes (por si hubo cambios hechos sin internet) */
+  async function purgar() {
+    const l = pendLeer(); if (!l.length || !vivo) return;
+    const quedan = [];
+    for (const p of l) { try { p.op === 'borrar' ? await borrarRow(p.tipo, p.id) : await subirRow(p.tipo, p.datos); } catch (e) { if (p.intentos >= 30) return aviso('Un cambio no pudo subirse a la nube; haz un respaldo.'); quedan.push({ ...p, intentos: (p.intentos || 0) + 1 }); } }
+    pendGuardar(quedan);
+  }
+  /* Toma el negocio remoto; si está vacío y ya hay datos locales, los transfiere a la nube */
+  const inicial = (async () => {
+    const rows = await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&select=id,tipo,datos,updated_at', {}, token);
+    const porTipo = {}; (rows || []).forEach(r => { (porTipo[r.tipo] = porTipo[r.tipo] || []).push(r); conocer[r.tipo + '::' + r.id] = r.updated_at; });
+    if (!(rows || []).length) {
+      /* negocio recién creado: transmite todo lo que este dispositivo ya tenía */
+      COLS.forEach(c => { (S[c] || []).forEach(o => { if (o && o.id) pendAdd({ op: 'subir', tipo: c, id: o.id, datos: o, intentos: 0 }); }); });
+    } else {
+      COLS.forEach(c => { S[c] = (porTipo[c] || []).map(r => r.datos && typeof r.datos === 'object' ? r.datos : { id: r.id }); });
+    }
+    COLS.forEach(c => emitir(c));
+    purgar();
+  })();
+  let TemporizadorPeriodico = setInterval(() => { if (document.visibilityState === 'visible' && vivo && navigator.onLine !== false) { mezclar(false).catch(() => {}); try { localStorage.setItem(NUBE_FECHA_ULTIMA, String(Date.now())); } catch (e) {} } }, 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') mezclar(false).catch(() => {}); });
+  return {
+    nube: true, negocio: { id: negId, nombre: negocioFila.nombre || '', codigo: negocioFila.codigo },
+    repicar: mezclar,
+    cerrar() { vivo = false; clearInterval(TemporizadorPeriodico); Object.keys(oyentes).forEach(k => delete oyentes[k]); },
+    collection(tipo) {
+      return {
+        doc(id) { return {
+          set: async o => { try { await subirRow(tipo, o); emitir(tipo); } catch (e) { pendAdd({ op: 'subir', tipo, id, datos: o, intentos: 0 }); throw e; } },
+          delete: async () => { try { await borrarRow(tipo, id); emitir(tipo); } catch (e) { pendAdd({ op: 'borrar', tipo, id, intentos: 0 }); } }
+        }; },
+        onSnapshot(cb, err) { (oyentes[tipo] = oyentes[tipo] || []).push(cb); inicial.then(() => { try { cb(snapDe(tipo)); } catch (e) { if (err) err({ code: 'nube' }); } }).catch(() => { if (err) err({ code: 'nube' }); }); }
+      };
+    }
+  };
+}
+/* Conecta a la nube con lo que ya está guardado; devuelve true si quedó conectado */
+async function conectarNube() {
+  const cfg = nbCfg(), cta = nbCta(), neg = nbNeg();
+  if (!cfg || !cta) return false;
+  let sesion = cta;
+  try { if (navigator.onLine === false) return false; }
+  catch (e) {}
+  try {
+    if (!sesion.access) return false;
+    sesion = await sbRefrescar(cfg, sesion.refresh).catch(() => null);
+    if (!sesion) { nbSet(NBK_S, null); return false; }
+    nbSet(NBK_S, sesion);
+    const nueva = await crearSupabaseDB(cfg, sesion, neg);
+    if (DB && DB.cerrar) DB.cerrar();
+    DB = nueva;
+    try { localStorage.setItem(NUBE_FECHA_ULTIMA, String(Date.now())); } catch (e) {}
+    marcaSync(true);;
+    COLS.forEach(c => nueva.collection(c).onSnapshot(snap => { S[c] = snap.docs.map(d => d.data()); pintar(); }, err => { if (err && err.code === 'revoked') { if (DB.cerrar) DB.cerrar(); DB = null; marcaSync(false); } }));
+    return true;
+  } catch (e) { return false; }
+}
+/* Área de manejo desde Ajustes */
+function formNube() {
+  const c = nbCfg(), ses = nbCta(), neg = nbNeg();
+  const estado = !c ? 'Todavía no hay conexión a la nube.' : !ses ? 'Conexión lista. Falta entrar con tu cuenta.' : !neg ? 'Cuenta lista. Te falta crear tu negocio o unirte con un código.' : 'Conectado a la nube.';
+  abrir(`<h2>Guardado en la nube</h2><p class="small muted" style="margin:0 0 10px">Comparte tus datos entre tu teléfono y tu computadora, y con quien tú quieras (ej. tu esposa o socios). Cada negocio queda privado: nadie ve los datos de otro.</p>
+  <p class="small" style="margin:0 0 10px"><b>Estado:</b> ${esc(estado)} ${neg && ses ? `· Negocio <b>${esc(nbNeg().nombre || '')}</b> · Código <b>${esc(nbNeg().codigo)}</b>` : ''}</p>
+  <div class="f">
+    <div class="full"><label for="f-nb-url">URL de tu proyecto Supabase</label><input id="f-nb-url" type="url" placeholder="https://xxxxx.supabase.co" value="${esc(c ? c.url : '')}"></div>
+    <div class="full"><label for="f-nb-key">Clave pública (anon / publishable)</label><input id="f-nb-key" type="text" placeholder="sb_publishable_… o eyJ…" value="${esc(c ? c.key : '')}"></div>
+    <div class="full"><button class="btn sm" data-act="nube-config">Guardar conexión</button></div>
+    ${c ? `<div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" value="${esc(ses && ses.email ? ses.email : '')}"></div>
+    <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password"></div>
+    <div class="full"><button class="btn pri" data-act="nube-entrar">Entrar / Crear cuenta</button> <button class="btn" data-act="nube-salir" style="${ses ? '' : 'display:none'}">Salir de la cuenta</button></div>
+    ${ses ? `<div class="full" style="border-top:1px solid var(--line);padding-top:10px"><h3 style="font-size:15px;margin:0 0 4px">Tu negocio</h3><p class="small muted" style="margin:0 0 6px">Crea el tuyo o pega el código de otro negocio para trabajar en sus mismos datos.</p>
+      <input id="f-nb-nombre" type="text" placeholder="Nombre del negocio (para crearlo)" style="margin-bottom:6px">
+      <button class="btn pri" data-act="nube-crear">Crear negocio</button>
+      <p class="small muted" style="margin:8px 0 2px">— o si alguien ya te invitó —</p>
+      <input id="f-nb-codigo" type="text" placeholder="Código del negocio (ej: 8AF3DE)">
+      <button class="btn" data-act="nube-unirme" style="margin-top:6px">Unirme con código</button></div>` : ''}` : ''}
+  </div><div class="foot"><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
+}
+
 /* ----- respaldos: recordatorio, contador de cambios y copias automáticas del teléfono ----- */
 const MK = 'mnad-meta', CK = 'mnad-copias';
 const meta = () => { try { return JSON.parse(localStorage.getItem(MK) || '{}') || {}; } catch (e) { return {}; } };
@@ -1201,6 +1338,8 @@ function formAjustes() {
     ${RECS.map(([k, nombre, tit, ej]) => `<div class="full" style="border-top:1px solid var(--line);padding-top:10px"><b>${nombre}</b></div>
       ${fld('t-' + k, 'Título del recibo', (c.r && c.r[k] && c.r[k].titulo) || '', 'text', `placeholder="${esc(tit)}"`, 'full')}
       ${area('x-' + k, 'Texto fijo (garantía, condiciones…)', (c.r && c.r[k] && c.r[k].texto) || '', ej)}`).join('')}
+    <div class="full" style="border-top:1px solid var(--line);padding-top:10px"><h3 style="font-size:15px;margin:0 0 4px">Guardado en la nube</h3><p class="small muted" style="margin:0 0 8px">Comparte y respalda tus datos entre teléfonos y computadoras. ${nbCta() && nbNeg() ? '<b>Conectado</b>.' : 'Todavía sin conectar.'}</p>
+      <button class="btn sm pri" data-act="nube">Configurar nube</button></div>
     <div class="full" style="border-top:1px solid var(--line);padding-top:10px"><h3 style="font-size:15px;margin:0 0 4px">Seguridad</h3><p class="small muted" style="margin:0 0 8px">${pinGet() ? 'El PIN está activado.' : 'Protege la app con un PIN para que nadie vea tus clientes ni tus cobros.'}</p>
       ${pinGet() ? '<button class="btn sm" data-act="pin-cambiar">Cambiar PIN</button> <button class="btn sm danger" data-act="pin-quitar">Quitar PIN</button>' : '<button class="btn sm pri" data-act="pin-activar">Activar PIN</button>'}</div></div>
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-ajustes">Guardar</button></div>`);
@@ -1658,6 +1797,52 @@ const ACT = {
   tipos: () => formTipos(), 'nuevo-tipo': () => formTipo(), 'edit-tipo': el => formTipo(el.dataset.id), 'save-tipo': el => saveTipo(el.dataset.id),
   'del-tipo': async el => { await borrar('tipos', el.dataset.id); formTipos(); },
   ajustes: () => formAjustes(), 'save-ajustes': () => saveAjustes(),
+  nube: () => formNube(),
+  'nube-config': () => {
+    const url = v$('nb-url'), key = v$('nb-key');
+    if (!url || !key) return aviso('Pega la URL y la clave pública de tu proyecto.');
+    nbSet(NBK, { url: url.trim(), key: key.trim() });
+    aviso('Conexión a la nube guardada'); formNube();
+  },
+  'nube-entrar': async () => {
+    const cfg = nbCfg(); if (!cfg) return aviso('Primero guarda la conexión (URL y clave).');
+    const email = v$('nb-email'), pass = v$('nb-pass');
+    if (!email || !pass) return aviso('Escribe tu correo y contraseña.');
+    aviso('Entrando…');
+    try {
+      let s = await sbEntrar(cfg, email, pass).catch(er => {
+        const m = String(er && er.message || er || '');
+        if (/Invalid login credentials|Email not confirmed/i.test(m)) { if (!/Email not confirmed/i.test(m)) throw er;
+          throw new Error('Confirma tu correo con el enlace que te envió Supabase y vuelve a intentar.'); }
+        if (/User already registered/i.test(m)) throw new Error('Ese correo ya tiene cuenta: usa la contraseña con la que la creaste.');
+        return sbCrear(cfg, email, pass).catch(e2 => { const m2 = String(e2 && e2.message || e2 || ''); if (!/Password should be at least|invalid/i.test(m2)) { throw new Error(m2 || m); } throw e2; });
+      });
+      nbSet(NBK_S, { ...s, email });
+      aviso('Cuenta lista'); formNube();
+    } catch (e) { aviso('No se pudo entrar: ' + (e && e.message || e)); }
+  },
+  'nube-crear': async () => {
+    const cfg = nbCfg(), ses = nbCta(); if (!cfg || !ses) return aviso('Entra con tu cuenta primero.');
+    const nombre = v$('nb-nombre'); if (!nombre) return aviso('Escribe el nombre del negocio.');
+    try {
+      nbSet(NBK_S, { ...ses, access: (await sbRefrescar(cfg, ses.refresh)).access });
+      const id = await sbApi(cfg, '/rest/v1/rpc/crear_mi_negocio', { body: JSON.stringify({ nombre: nombre.trim() }) }, nbCta().access);
+      nbSet(NBK_NG, { id: id, nombre: nombre.trim() });
+      aviso('Negocio creado'); cerrar(); await conectarNube().then(ok => aviso(ok ? '¡Ahora tus datos quedan en la nube y se comparten!' : 'No se pudo conectar: revisa tu conexión'));
+    } catch (e) { aviso('No se pudo crear: ' + (e && e.message || e)); if (/Ya perteneces|negocio_actual/i.test(String(e && e.message))) { try { cerrar(); await conectarNube(); } catch (e2) {} } }
+  },
+  'nube-unirme': async () => {
+    const cfg = nbCfg(), ses = nbCta(); if (!cfg || !ses) return aviso('Entra con tu cuenta primero.');
+    const codigo = v$('nb-codigo'); if (!codigo) return aviso('Escribe el código que te compartieron.');
+    try {
+      nbSet(NBK_S, { ...ses, access: (await sbRefrescar(cfg, ses.refresh)).access });
+      const id = await sbApi(cfg, '/rest/v1/rpc/unirme_con_codigo', { body: JSON.stringify({ p_codigo: codigo.trim() }) }, nbCta().access);
+      if (!id) return aviso('Ese código no corresponde a ningún negocio.');
+      nbSet(NBK_NG, { id: id });
+      aviso('¡Bienvenido al negocio!'); cerrar(); await conectarNube().then(ok => aviso(ok ? 'Connectado: comparten los mismos datos' : 'No se pudo conectar'));
+    } catch (e) { aviso('No se pudo unir: ' + (e && e.message || e)); }
+  },
+  'nube-salir': () => { nbSet(NBK_S, null); nbSet(NBK_NG, null); aviso('Saliste de la cuenta'); formNube(); },
   'pin-activar': () => formPin('activar'), 'pin-cambiar': () => formPin('cambiar'), 'pin-quitar': () => formPin('quitar'), 'save-pin': el => savePin(el.dataset.modo),
   respaldo: () => formRespaldo(), 'respaldo-luego': () => { metaSet({pospuesto: hoy()}); pintar(); }, 'copia-restaurar': el => restaurarCopia(+el.dataset.i),
   'bk-xlsx': () => descargar(construirXlsx(), `respaldo-${hoy()}.xlsx`),
@@ -1718,9 +1903,22 @@ function marcaSync(nube) {
 }
 async function arrancar() {
   $('#view').innerHTML = '<div class="panel"><div class="empty">Cargando tus datos…</div></div>';
+  /* Verifica la llave: si lleva muchas seses sin iniciar sesión (cuenta cerrada, servidor caído, o sin red sostenida), se borra todo y se pide acceso */
+  const fm = Number(localStorage.getItem(NUBE_FECHA_ULTIMA) || '0');
+  if (fm && (Date.now() - fm) / 86400000 > DIAS_SIN_SESION_PARA_BLOQUEAR) {
+    try { sessionStorage.setItem('mnad-bloqueo', '1'); localStorage.removeItem(NBK_S); localStorage.removeItem(NBK_NG); localStorage.removeItem('mnad-v1'); localStorage.removeItem('mnad-meta'); } catch (e) {}
+  }
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
-  if (!db) db = await crearLocalDB();
+  if (!db && nbCta()) { try { db = await crearSupabaseDB(nbCfg(), nbCta(), nbNeg()); } catch (e) { db = null; } }
+  if (db) { DB = db; marcaSync(true);
+    const listos = new Set(); let pintado = false;
+    const mostrar = () => { pintado = true; pintar(); };
+    setTimeout(() => { if (!pintado) mostrar(); }, 5000);
+    COLS.forEach(c => db.collection(c).onSnapshot(snap => { S[c] = snap.docs.map(d => d.data()); listos.add(c); if (listos.size === COLS.length || pintado) mostrar(); }, err => { if (err && err.code === 'revoked') { if (DB.cerrar) DB.cerrar(); DB = null; marcaSync(false); } }));
+    return;
+  }
+  db = await crearLocalDB();
   if (!db) { lsLoad(); copiaDelDia(); marcaSync(false); pintar(); return; }
   DB = db; marcaSync(!db.local);
   const listos = new Set(); let pintado = false;
@@ -1731,6 +1929,8 @@ async function arrancar() {
     listos.add(c);
     if (listos.size === COLS.length || pintado) mostrar();
   }, err => { if (err && err.code === 'revoked') { DB = null; marcaSync(false); } }));
+  /* Si la llave venció, abre la pantalla de acceso una vez cargada la app */
+  if (sessionStorage.getItem('mnad-bloqueo') === '1') { sessionStorage.removeItem('mnad-bloqueo'); setTimeout(() => formNube(), 300); }
 }
 pintar = (orig => function () { try { orig(); } catch (e) { console.error(e); } })(pintar);
 iniciarBloqueo();
@@ -1738,6 +1938,8 @@ if (ES_APP) document.addEventListener('click', e => { const a = e.target.closest
 arrancar();
 /* Sin internet: guarda la app en el equipo y pide que el navegador no borre los datos */
 if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+/* Al volver la red, si la nube está configurada y sigo en modo local, me reconecto */
+window.addEventListener('online', async () => { if (!window.claude && DB && DB.local && nbCfg() && nbCta()) { const ok = await conectarNube(); if (ok) aviso('De vuelta en la nube'); } });
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
 </script>
 
