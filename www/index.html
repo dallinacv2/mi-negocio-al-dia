@@ -188,6 +188,13 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
 /* bloqueo con PIN */
 #lock{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:16px}
 #lock[hidden]{display:none}
+/* pantalla de bienvenida: entrar a la nube o seguir sin conectar */
+#bienv{position:fixed;inset:0;z-index:50;background:var(--bg);overflow:auto;display:flex;align-items:center;justify-content:center;padding:16px}
+.bienvbox{width:100%;max-width:360px}
+.bienvbox .lockbrand{text-align:center;margin-bottom:8px}
+.bienvbox>p{text-align:center;margin:0 0 14px}
+.bienvbox .f{margin-bottom:6px}
+.bienv-local{display:block;margin:14px auto 0;background:none;border:0;color:var(--muted);text-decoration:underline;cursor:pointer;font-size:15px;padding:8px}
 .lockbox{width:100%;max-width:320px;text-align:center}
 .lockbrand{font:700 22px var(--f-display);margin-bottom:6px}
 #lock-msg{margin:0 0 14px;color:var(--muted);min-height:22px}
@@ -340,6 +347,8 @@ function crearLocalDB() {
     } catch (e) {}
     return {
       local: true,
+      /* Lee todo lo guardado en este equipo (para ofrecer subirlo a la nube) */
+      async todo() { const r = {}; for (const c of COLS) r[c] = await leer(c); return r; },
       /* Sobrescribe cada colección con el listado dado (usado al restaurar copias o respaldos completos) */
       async replicar(listado) {
         for (const c of COLS) {
@@ -368,6 +377,8 @@ const NBK = 'mnad-nube', NBK_S = 'mnad-nube-sesion', NBK_NG = 'mnad-nube-negocio
 const NUBE_DE_FABRICA = { url: 'https://zjszzzpentkzijphyskm.supabase.co', key: 'sb_publishable_Q9GNwYdkPbauZOeU9wUa0A_6Shbr5Er' };
 const DIAS_SIN_SESION_PARA_BLOQUEAR = 30;
 const NUBE_FECHA_ULTIMA = 'mnad-sesion-ultimo';
+const SIN_NUBE = 'mnad-sin-nube';            /* la persona eligió "Usar sin conectar": no se le vuelve a preguntar al abrir */
+let NUBE_LISTA = Promise.resolve(false);      /* se cumple cuando la nube terminó de bajar los datos */
 const nbCfg = () => { try { const j = JSON.parse(localStorage.getItem(NBK) || 'null'); return (j && j.url && j.key) ? j : NUBE_DE_FABRICA; } catch (e) { return NUBE_DE_FABRICA; } };
 const nbCta = () => { try { return JSON.parse(localStorage.getItem(NBK_S) || 'null'); } catch (e) { return null; } };
 const nbNeg = () => { try { return JSON.parse(localStorage.getItem(NBK_NG) || 'null'); } catch (e) { return null; } };
@@ -378,7 +389,7 @@ function sbApi(cfg, path, o = {}, token) {
   return fetch(nbBase(cfg.url) + path, { ...opts, headers: { apikey: cfg.key, 'Content-Type': 'application/json', ...(o.headers || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) } }).then(async r => {
     const txt = await r.text();
     let m = txt; try { const j = JSON.parse(txt); m = j.message || j.error_description || j.msg || txt; } catch (e2) {}
-    if (!r.ok) throw new Error(String(m || 'HTTP ' + r.status));
+    if (!r.ok) { const er = new Error(String(m || 'HTTP ' + r.status)); er.status = r.status; throw er; }
     let out = null; try { out = txt ? JSON.parse(txt) : null; } catch (e3) { out = txt; }
     return out;
   });
@@ -470,8 +481,13 @@ async function conectarNube() {
   catch (e) {}
   try {
     if (!sesion.access) return false;
-    sesion = await sbRenovar(cfg, cta).catch(() => null);
-    if (!sesion) { nbSet(NBK_S, null); return false; }
+    let falla = null;
+    sesion = await sbRenovar(cfg, cta).catch(er => { falla = er; return null; });
+    if (!sesion) {
+      /* Sin red o servidor caído: se conserva la sesión y se sigue en modo local. Solo se borra si el servidor la rechazó (400/401/403) */
+      if (!falla || ![400, 401, 403].includes(falla.status)) return false;
+      nbSet(NBK_S, null); return false;
+    }
     /* Si el teléfono no recuerda el negocio (sesión nueva, otro equipo, se salió de la cuenta), se lo pedimos al servidor */
     if (!neg || !neg.id) {
       const id = await negocioDelServidor(cfg, sesion.access);
@@ -483,9 +499,54 @@ async function conectarNube() {
     DB = nueva;
     try { localStorage.setItem(NUBE_FECHA_ULTIMA, String(Date.now())); } catch (e) {}
     marcaSync(true);;
-    COLS.forEach(c => nueva.collection(c).onSnapshot(snap => { S[c] = snap.docs.map(d => d.data()); pintar(); }, err => { if (err && err.code === 'revoked') { if (DB.cerrar) DB.cerrar(); DB = null; marcaSync(false); } }));
+    const vistos = new Set();
+    NUBE_LISTA = new Promise(listo => {
+      setTimeout(() => listo(false), 12000);
+      COLS.forEach(c => nueva.collection(c).onSnapshot(snap => { S[c] = snap.docs.map(d => d.data()); pintar(); vistos.add(c); if (vistos.size === COLS.length) listo(true); }, err => { if (err && err.code === 'revoked') { if (DB.cerrar) DB.cerrar(); DB = null; marcaSync(false); } }));
+    });
     return true;
   } catch (e) { return false; }
+}
+/* ----- bienvenida: al abrir sin sesión guardada, ofrece entrar a la nube o seguir sin conectar ----- */
+const sinNube = () => { try { return !!localStorage.getItem(SIN_NUBE); } catch (e) { return false; } };
+function cerrarBienvenida() { const b = document.getElementById('bienv'); if (b) b.remove(); }
+function mostrarBienvenida() {
+  if (document.getElementById('bienv')) return;
+  const d = document.createElement('div'); d.id = 'bienv';
+  d.innerHTML = `<div class="bienvbox" role="dialog" aria-modal="true" aria-label="Bienvenida">
+    <div class="lockbrand">Mi Negocio Al Día</div>
+    <p class="small muted">Entra para guardar tus datos en la nube y usarlos en tu teléfono y tu computadora, solos o con quien tú quieras. Si es tu primera vez, tu cuenta se crea sola.</p>
+    <div class="f">
+      <div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>
+      <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres"></div>
+      <div class="full"><button class="btn pri" data-act="nube-entrar" style="width:100%">Entrar o crear cuenta</button></div>
+    </div>
+    <button class="bienv-local" data-act="bienv-local">Usar sin conectar</button>
+    <p class="small muted" style="margin-top:4px">Sin conectar, tus datos quedan solo en ${ES_APP ? 'este teléfono' : 'este navegador'}. Puedes conectarte después desde Ajustes.</p>
+  </div>`;
+  d.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'f-nb-pass') { const b = d.querySelector('[data-act="nube-entrar"]'); if (b) b.click(); } });
+  document.body.appendChild(d);
+}
+/* Si lo guardado en este equipo no está en la nube (por ejemplo, al unirse a un negocio que ya tenía datos), ofrece subirlo. Solo agrega: nunca borra ni pisa lo que ya hay */
+async function ofrecerSubirLocal() {
+  try {
+    const neg = nbNeg(); if (!neg || !neg.id || !DB || DB.local) return;
+    const clave = 'mnad-subida-local-' + neg.id;
+    if (localStorage.getItem(clave)) return;
+    if (!(await NUBE_LISTA)) return;
+    const loc = await crearLocalDB(); if (!loc || !loc.todo) return;
+    const datos = await loc.todo(), nuevos = [];
+    COLS.forEach(c => (datos[c] || []).forEach(o => { if (o && o.id && !(S[c] || []).some(x => x && x.id === o.id)) nuevos.push([c, o]); }));
+    if (!nuevos.length) { localStorage.setItem(clave, '1'); return; }
+    confirmar('Datos de este equipo', `Hay ${nuevos.length} registros guardados ${ES_APP ? 'en este teléfono' : 'en este navegador'} que todavía no están en la nube. ¿Quieres subirlos a tu negocio? No se borra ni se cambia nada de lo que ya está en la nube.`, 'Subir a la nube', async () => {
+      aviso('Subiendo…');
+      try {
+        for (let i = 0; i < nuevos.length; i += 20) await Promise.all(nuevos.slice(i, i + 20).map(([c, o]) => DB.collection(c).doc(o.id).set(o)));
+        nuevos.forEach(([c, o]) => { if (!S[c].some(x => x && x.id === o.id)) S[c].push(o); });
+        localStorage.setItem(clave, '1'); pintar(); aviso('Listo: se subieron ' + nuevos.length + ' registros');
+      } catch (e) { aviso('No se pudo subir todo. Intenta de nuevo desde Ajustes o haz un respaldo.'); }
+    });
+  } catch (e) {}
 }
 /* Área de manejo desde Ajustes */
 function formNube() {
@@ -1880,6 +1941,8 @@ const ACT = {
         return sbCrear(cfg, email, pass).catch(e2 => { const m2 = String(e2 && e2.message || e2 || ''); if (!/Password should be at least|invalid/i.test(m2)) { throw new Error(m2 || m); } throw e2; });
       });
       nbSet(NBK_S, { ...s, email });
+      try { localStorage.removeItem(SIN_NUBE); } catch (e2) {}
+      cerrarBienvenida();
       /* ¿Esta cuenta ya tiene negocio en el servidor? Entonces se conecta a ese, sin pedir crear otro */
       try {
         const id = await negocioDelServidor(cfg, s.access);
@@ -1887,6 +1950,7 @@ const ACT = {
           nbSet(NBK_NG, { id });
           cerrar();
           const ok = await conectarNube();
+          if (ok) ofrecerSubirLocal();
           return aviso(ok ? 'Entraste y quedaste conectado a tu negocio' : 'Cuenta lista, pero no se pudo conectar: revisa tu conexión');
         }
       } catch (e2) {}
@@ -1900,7 +1964,7 @@ const ACT = {
       const nueva = await sbRenovar(cfg, ses);
       const id = await sbApi(cfg, '/rest/v1/rpc/crear_mi_negocio', { body: JSON.stringify({ nombre: nombre.trim() }) }, nueva.access);
       nbSet(NBK_NG, { id: id, nombre: nombre.trim() });
-      aviso('Negocio creado'); cerrar(); await conectarNube().then(ok => aviso(ok ? '¡Ahora tus datos quedan en la nube y se comparten!' : 'No se pudo conectar: revisa tu conexión'));
+      aviso('Negocio creado'); cerrar(); await conectarNube().then(ok => { aviso(ok ? '¡Ahora tus datos quedan en la nube y se comparten!' : 'No se pudo conectar: revisa tu conexión'); if (ok) ofrecerSubirLocal(); });
     } catch (e) {
       if (/Ya perteneces|negocio_actual/i.test(String(e && e.message))) {
         /* Esta cuenta ya tiene negocio en el servidor: en vez de dar error, se conecta a él */
@@ -1917,7 +1981,7 @@ const ACT = {
       const id = await sbApi(cfg, '/rest/v1/rpc/unirme_con_codigo', { body: JSON.stringify({ p_codigo: codigo.trim() }) }, nueva.access);
       if (!id) return aviso('Ese código no corresponde a ningún negocio.');
       nbSet(NBK_NG, { id: id });
-      aviso('¡Bienvenido al negocio!'); cerrar(); await conectarNube().then(ok => aviso(ok ? 'Conectado: comparten los mismos datos' : 'No se pudo conectar'));
+      aviso('¡Bienvenido al negocio!'); cerrar(); await conectarNube().then(ok => { aviso(ok ? 'Conectado: comparten los mismos datos' : 'No se pudo conectar'); if (ok) ofrecerSubirLocal(); });
     } catch (e) {
       if (/Ya perteneces/i.test(String(e && e.message))) {
         nbSet(NBK_NG, null); cerrar(); aviso('Esta cuenta ya pertenece a un negocio; conectando…');
@@ -1925,6 +1989,7 @@ const ACT = {
       } else aviso('No se pudo unir: ' + (e && e.message || e));
     }
   },
+  'bienv-local': () => { try { localStorage.setItem(SIN_NUBE, '1'); } catch (e) {} cerrarBienvenida(); },
   'nube-salir': () => { nbSet(NBK_S, null); nbSet(NBK_NG, null); aviso('Saliste de la cuenta'); formNube(); },
   'pin-activar': () => formPin('activar'), 'pin-cambiar': () => formPin('cambiar'), 'pin-quitar': () => formPin('quitar'), 'save-pin': el => savePin(el.dataset.modo),
   respaldo: () => formRespaldo(), 'respaldo-luego': () => { metaSet({pospuesto: hoy()}); pintar(); }, 'copia-restaurar': el => restaurarCopia(+el.dataset.i),
@@ -1990,7 +2055,7 @@ async function arrancar() {
   /* Datos: guardados siempre. Solo se bloquea la pantalla hasta que el dueño autorice de nuevo. */
   const fm = Number(localStorage.getItem(NUBE_FECHA_ULTIMA) || '0');
   if (fm && (Date.now() - fm) / 86400000 > DIAS_SIN_SESION_PARA_BLOQUEAR) {
-    try { sessionStorage.setItem('mnad-bloqueo-activo', '1'); localStorage.removeItem(NBK_S); localStorage.removeItem(NBK_NG); } catch (e) {}
+    try { sessionStorage.setItem('mnad-bloqueo-activo', '1'); localStorage.removeItem(NBK_S); localStorage.removeItem(NBK_NG); localStorage.removeItem(SIN_NUBE); } catch (e) {}
   }
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
@@ -2003,6 +2068,8 @@ async function arrancar() {
     COLS.forEach(c => db.collection(c).onSnapshot(snap => { S[c] = snap.docs.map(d => d.data()); listos.add(c); if (listos.size === COLS.length || pintado) mostrar(); }, err => { if (err && err.code === 'revoked') { if (DB.cerrar) DB.cerrar(); DB = null; marcaSync(false); } }));
     return;
   }
+  /* Sin sesión guardada (y sin haber elegido "Usar sin conectar"): pantalla de bienvenida. La app local carga debajo, lista para usarse */
+  if (!window.claude && !nbCta() && !sinNube()) mostrarBienvenida();
   db = await crearLocalDB();
   if (!db) { lsLoad(); copiaDelDia(); marcaSync(false); pintar(); return; }
   DB = db; marcaSync(!db.local);
