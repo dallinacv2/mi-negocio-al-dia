@@ -1,5 +1,5 @@
 /* Guarda la app en el equipo para que abra sin internet. Los datos del negocio no pasan por aquí: viven en el navegador. */
-const CACHE = 'mnad-app-v3';
+const CACHE = 'mnad-app-v4';
 const ARCHIVOS = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 
 /* Cuando el usuario toca "Actualizar" en el banner, activa la versión nueva al toque */

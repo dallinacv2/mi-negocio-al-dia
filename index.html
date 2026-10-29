@@ -36,10 +36,10 @@ body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--f-body);margin:0}
 .brand{font:700 20px var(--f-display);letter-spacing:-.02em;color:#fff}
 .brand-sub{font-size:12px;opacity:.9;margin-top:2px}
 .sidebar-nav{display:flex;flex-direction:column;gap:4px;padding:12px 10px;overflow:auto}
-.sidebar-nav button{display:flex;align-items:center;gap:10px;text-align:left;background:none;border:0;border-radius:10px;padding:10px 12px;font-weight:500;color:var(--ink);cursor:pointer}
+.sidebar-nav button{display:flex;align-items:center;gap:12px;text-align:left;background:none;border:0;border-radius:12px;padding:14px 15px;font-size:16px;font-weight:500;color:var(--ink);cursor:pointer}
 .sidebar-nav button:hover{background:var(--accent-soft)}
 .sidebar-nav button[aria-selected="true"]{background:linear-gradient(90deg,rgba(14,90,107,.12) 0%,transparent 100%);color:var(--accent);font-weight:600}
-.sidebar-nav .nav-ico{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center}
+.sidebar-nav .nav-ico{width:22px;height:22px;font-size:19px;display:inline-flex;align-items:center;justify-content:center}
 .sidebar-nav .badge{margin-left:auto}
 .main-area{display:flex;flex-direction:column;min-width:0}
 .topbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:14px 22px;background:var(--surface);border-bottom:1px solid var(--line);box-shadow:0 1px 2px rgba(15,22,28,.02)}
@@ -117,6 +117,14 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
 .pill.bad{background:var(--bad-soft);color:var(--bad)} .pill.neu{background:var(--accent-soft);color:var(--accent)}
 .bar{height:6px;border-radius:999px;background:var(--line);overflow:hidden;margin-top:8px}
 .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent) 0%,#22d3ee 100%)}
+/* Gráfico de columnas: ventas de cada día del mes */
+.chart{display:flex;align-items:flex-end;gap:3px;height:92px;padding:10px 4px 0}
+.chart .col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0}
+.chart .col b{display:block;height:var(--h,0%);min-height:2px;border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent) 0%,#22d3ee 100%)}
+.chart .col.hoy b{background:linear-gradient(180deg,#0ea5a4 0%,#34d399 100%)}
+.chart .col.s0 b{background:none}
+.chart .dias{display:flex;gap:3px;padding-top:6px}
+.chart .dias u{flex:1;text-decoration:none;min-width:0;overflow:hidden;text-align:center}
 
 /* controles */
 .btn{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:500;box-shadow:0 1px 1px rgba(15,22,28,.01)}
@@ -142,6 +150,11 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .preview{background:var(--accent-soft);border-radius:6px;padding:10px 12px;font-size:14px}
 .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
 .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(14px + env(safe-area-inset-top,0px));max-width:calc(100vw - 32px);text-align:center;background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:6px;z-index:60;font-size:14px}
+/* Banner de actualización: avisa que hay versión nueva y ofrece instalar */
+.nueva-ver{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--line);color:var(--ink);padding:12px 14px;border-radius:10px;z-index:70;box-shadow:0 16px 40px -20px rgba(0,0,0,.45);font-size:14px}
+.nueva-ver span{line-height:1.4}
+.nueva-ver button{flex-shrink:0}
+.nueva-ver [data-cc="actualizar"]{white-space:nowrap}
 table{border-collapse:collapse;width:100%} th,td{text-align:left;padding:8px 10px;border-top:1px solid var(--line);font-size:14px}
 th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-top:0}
 .scroll{overflow-x:auto}
@@ -285,9 +298,232 @@ async function guardarNativo(blob, nombre) {
 }
 const LS = 'mnad-v1';
 function lsLoad() { try { const j = JSON.parse(localStorage.getItem(LS) || '{}'); COLS.forEach(c => S[c] = j[c] || []); } catch (e) {} }
-function lsSave() {
-  try { localStorage.setItem(LS, JSON.stringify(S)); return true; }
-  catch (e) { aviso('⚠ No se pudo guardar en el teléfono (¿sin espacio?). Haz un respaldo ahora.'); return false; }
+async function lsSave() {
+  let okls = true;
+  try { localStorage.setItem(LS, JSON.stringify(S)); }
+  catch (e) { okls = false; aviso('⚠ No se pudo guardar en el teléfono (¿sin espacio?). Haz un respaldo ahora.'); }
+  /* Si la base local de IndexedDB está activa, replica este listado ahí (usado por restauraciones que ya dejaron S en memoria) */
+  if (DB && DB.local) { try { await DB.replicar(S); } catch (e) {} }
+  return okls;
+}
+
+/* ----- base local en IndexedDB: misma interfaz que la base compartida (coleccion.doc.set / onSnapshot) para aguantar mucho más que el límite del navegador y dejar el camino listo para la nube ----- */
+let LOCAL_PROM = null;
+function crearLocalDB() {
+  if (LOCAL_PROM) return LOCAL_PROM;
+  LOCAL_PROM = (async () => {
+    let db = null;
+    try {
+      if (!window.indexedDB) return null;
+      const rq = indexedDB.open('mnad-local-v1', 1);
+      rq.onupgradeneeded = () => { const d = rq.result; COLS.forEach(c => { if (!d.objectStoreNames.contains(c)) d.createObjectStore(c); }); };
+      db = await new Promise((ok, ko) => { rq.onsuccess = () => ok(rq.result); rq.onerror = () => ko(rq.error); setTimeout(() => ko(new Error('la base local no abrió a tiempo')), 6000); });
+    } catch (e) { return null; }
+    const oyentes = {};
+    const snap = docs => ({ docs: docs.map(o => ({ id: o.id, data: () => o })) });
+    const leer = col => new Promise((ok, ko) => {
+      try { const r = db.transaction(col).objectStore(col).getAll(); r.onsuccess = () => ok((r.result || []).filter(x => x && x.id)); r.onerror = () => ko(r.error); } catch (e) { ko(e); }
+    });
+    const emitir = async col => {
+      const oys = oyentes[col]; if (!oys || !oys.length) return;
+      try { const s = snap(await leer(col)); oys.forEach(cb => { try { cb(s); } catch (e) {} }); }
+      catch (e) { oys.forEach(cb => { try { cb(null, { code: 'local' }); } catch (x) {} }); }
+    };
+    /* Importa una sola vez: si IndexedDB está vacío y este navegador ya tenía datos, los lleva a la base local */
+    try {
+      const vacias = (await Promise.all(COLS.map(leer))).every(l => !l.length);
+      const j = (() => { try { return JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) { return null; } })();
+      if (vacias && j) await Promise.all(COLS.map(async c => {
+        const l = Array.isArray(j[c]) ? j[c].filter(x => x && x.id) : []; if (!l.length) return;
+        await new Promise((ok, ko) => { try { const t = db.transaction(c, 'readwrite'); const s = t.objectStore(c); l.forEach(o => s.put(o, o.id)); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } });
+      }));
+    } catch (e) {}
+    return {
+      local: true,
+      /* Sobrescribe cada colección con el listado dado (usado al restaurar copias o respaldos completos) */
+      async replicar(listado) {
+        for (const c of COLS) {
+          const l = Array.isArray(listado[c]) ? listado[c].filter(x => x && x.id) : [];
+          await new Promise((ok, ko) => { try { const t = db.transaction(c, 'readwrite'); const s = t.objectStore(c); s.clear(); l.forEach(o => s.put(o, o.id)); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } });
+        }
+        await Promise.all(COLS.map(c => emitir(c)));
+      },
+      collection(col) {
+        return {
+          doc(id) { return {
+            set: async o => { await new Promise((ok, ko) => { try { const t = db.transaction(col, 'readwrite'); t.objectStore(col).put(o, id); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } }); emitir(col); },
+            delete: async () => { await new Promise((ok, ko) => { try { const t = db.transaction(col, 'readwrite'); t.objectStore(col).delete(id); t.oncomplete = ok; t.onerror = () => ko(t.error); } catch (e) { ko(e); } }); emitir(col); }
+          }; },
+          onSnapshot(cb, err) { (oyentes[col] = oyentes[col] || []).push(cb); leer(col).then(docs => cb(snap(docs))).catch(e => { if (err) err({ code: 'local' }); }); }
+        };
+      }
+    };
+  })();
+  return LOCAL_PROM;
+}
+
+/* ----- nube: Supabase para varios negocios aislados (tú + esposa comparten; cada amigo su propio) ----- */
+const NBK = 'mnad-nube', NBK_S = 'mnad-nube-sesion', NBK_NG = 'mnad-nube-negocio', NBK_PEND = 'mnad-nube-pend';
+/* La base por defecto va incluida en la app (la protege el RLS del servidor). Puede cambiarse en "Opción avanzada". */
+const NUBE_DE_FABRICA = { url: 'https://zjszzzpentkzijphyskm.supabase.co', key: 'sb_publishable_Q9GNwYdkPbauZOeU9wUa0A_6Shbr5Er' };
+const DIAS_SIN_SESION_PARA_BLOQUEAR = 30;
+const NUBE_FECHA_ULTIMA = 'mnad-sesion-ultimo';
+const nbCfg = () => { try { const j = JSON.parse(localStorage.getItem(NBK) || 'null'); return (j && j.url && j.key) ? j : NUBE_DE_FABRICA; } catch (e) { return NUBE_DE_FABRICA; } };
+const nbCta = () => { try { return JSON.parse(localStorage.getItem(NBK_S) || 'null'); } catch (e) { return null; } };
+const nbNeg = () => { try { return JSON.parse(localStorage.getItem(NBK_NG) || 'null'); } catch (e) { return null; } };
+const nbSet = (k, v) => { try { if (v) localStorage.setItem(k, JSON.stringify(v)); else localStorage.removeItem(k); } catch (e) {} };
+const nbBase = url => String(url).replace(/\/+$/, '');
+function sbApi(cfg, path, o = {}, token) {
+  const opts = { ...o, method: o.method || (o.body ? 'POST' : 'GET') };
+  return fetch(nbBase(cfg.url) + path, { ...opts, headers: { apikey: cfg.key, 'Content-Type': 'application/json', ...(o.headers || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) } }).then(async r => {
+    const txt = await r.text();
+    let m = txt; try { const j = JSON.parse(txt); m = j.message || j.error_description || j.msg || txt; } catch (e2) {}
+    if (!r.ok) throw new Error(String(m || 'HTTP ' + r.status));
+    let out = null; try { out = txt ? JSON.parse(txt) : null; } catch (e3) { out = txt; }
+    return out;
+  });
+}
+const sbEntrar = (cfg, email, pass) => sbApi(cfg, '/auth/v1/token?grant_type=password', { body: JSON.stringify({ email: String(email).trim(), password: pass }) }).then(s => ({ access: s.access_token, refresh: s.refresh_token, uid: s.user && s.user.id }));
+const sbCrear = (cfg, email, pass) => sbApi(cfg, '/auth/v1/signup', { body: JSON.stringify({ email: String(email).trim(), password: pass }) }).then(s => {
+  if (!s || !s.access_token) { const err = (s && s.message) || 'Revisa tu correo: confirma el registro y luego toca Entrar.'; throw new Error(err); }
+  return { access: s.access_token, refresh: s.refresh_token, uid: s.user && s.user.id };
+});
+const sbRefrescar = (cfg, refresh) => sbApi(cfg, '/auth/v1/token?grant_type=refresh_token', { body: JSON.stringify({ refresh_token: refresh }) }).then(s => ({ access: s.access_token, refresh: s.refresh_token, uid: '' }));
+/* Refresca el token y conserva lo que ya sabíamos de la cuenta (correo, uid). Supabase rota el refresh token: hay que guardar el nuevo. */
+const sbRenovar = async (cfg, ses) => { const r = await sbRefrescar(cfg, ses.refresh); const nueva = { ...ses, access: r.access, refresh: r.refresh || ses.refresh }; nbSet(NBK_S, nueva); return nueva; };
+/* La fuente de verdad del negocio es el servidor (tabla miembro), no lo que quedó guardado en el teléfono */
+const negocioDelServidor = (cfg, token) => sbApi(cfg, '/rest/v1/rpc/negocio_actual', { method: 'POST', body: '{}' }, token).then(id => (typeof id === 'string' && id) ? id : null);
+/* Cola de operaciones pendientes (cuando no había internet al guardar en la nube) */
+const pendLeer = () => { try { const l = JSON.parse(localStorage.getItem(NBK_PEND) || '[]'); return Array.isArray(l) ? l : []; } catch (e) { return []; } };
+const pendGuardar = l => nbSet(NBK_PEND, l.slice(-400));
+function pendAdd(op) { const l = pendLeer(); l.push(op); pendGuardar(l); }
+async function crearSupabaseDB(cfg, sesion, neg) {
+  const token = sesion.access, negId = neg.id;
+  const conocer = {};                            /* id de registro -> updated_at remoto conocido */
+  const oyentes = {};                            /* tipo -> [callback] */
+  let vivo = true;
+  const negocioFila = await sbApi(cfg, '/rest/v1/negocio?id=eq.' + negId + '&select=codigo,nombre', {}, token).then(a => (a && a[0]) || null);
+  if (!negocioFila) { nbSet(NBK_NG, null); throw new Error('Ya no tienes acceso a ese negocio.'); }
+  nbSet(NBK_NG, { id: negId, nombre: negocioFila.nombre || neg.nombre || '', codigo: negocioFila.codigo });
+  const snapDe = col => ({ docs: (S[col] || []).map(o => ({ id: o.id, data: () => o })) });
+  const emitir = col => (oyentes[col] || []).forEach(cb => { try { cb(snapDe(col)); } catch (e) {} });
+  /* Trae lo remoto y lo une con lo local: por registro gana el último cambio; los borrados ajenos también bajan */
+  const mezclar = async primero => {
+    const rows = await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&select=id,tipo,datos,updated_at', {}, token);
+    const remotos = new Map(), colsTocadas = new Set();
+    (rows || []).forEach(r => { const k = r.tipo + '::' + r.id; remotos.set(k, r); if (conocer[k] === undefined || String(r.updated_at) > String(conocer[k])) { conocer[k] = r.updated_at; colsTocadas.add(r.tipo); } });
+    Object.keys(conocer).forEach(k => { if (!remotos.has(k) && !primero) { const [t, id] = k.split('::'); const i = S[t] ? S[t].findIndex(x => x.id === id) : -1; if (i >= 0) { S[t].splice(i, 1); colsTocadas.add(t); } delete conocer[k]; } });
+    colsTocadas.forEach(t => { if (!DATA_COLS.includes(t) && t !== 'tipos' && t !== 'ajustes') colsTocadas.delete(t); });
+    colsTocadas.forEach(emitir);
+  };
+  const subirRow = async (tipo, o) => {
+    if (!o || !o.id) return;
+    const r = await sbApi(cfg, '/rest/v1/registro?on_conflict=negocio_id,tipo,id', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([{ negocio_id: negId, tipo, id: o.id, datos: o }]) }, token);
+    const fila = (r && r[0] && r[0].updated_at) || new Date().toISOString();
+    conocer[tipo + '::' + o.id] = fila;
+  };
+  const borrarRow = async (tipo, id) => { await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&tipo=eq.' + encodeURIComponent(tipo) + '&id=eq.' + encodeURIComponent(id), { method: 'DELETE' }, token); delete conocer[tipo + '::' + id]; };
+  /* Purga la cola de pendientes (por si hubo cambios hechos sin internet) */
+  async function purgar() {
+    const l = pendLeer(); if (!l.length || !vivo) return;
+    const quedan = [];
+    for (const p of l) { try { p.op === 'borrar' ? await borrarRow(p.tipo, p.id) : await subirRow(p.tipo, p.datos); } catch (e) { if (p.intentos >= 30) return aviso('Un cambio no pudo subirse a la nube; haz un respaldo.'); quedan.push({ ...p, intentos: (p.intentos || 0) + 1 }); } }
+    pendGuardar(quedan);
+  }
+  /* Toma el negocio remoto; si está vacío y ya hay datos locales, los transfiere a la nube */
+  const inicial = (async () => {
+    const rows = await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&select=id,tipo,datos,updated_at', {}, token);
+    const porTipo = {}; (rows || []).forEach(r => { (porTipo[r.tipo] = porTipo[r.tipo] || []).push(r); conocer[r.tipo + '::' + r.id] = r.updated_at; });
+    if (!(rows || []).length) {
+      /* negocio recién creado: transmite todo lo que este dispositivo ya tenía */
+      COLS.forEach(c => { (S[c] || []).forEach(o => { if (o && o.id) pendAdd({ op: 'subir', tipo: c, id: o.id, datos: o, intentos: 0 }); }); });
+    } else {
+      COLS.forEach(c => { S[c] = (porTipo[c] || []).map(r => r.datos && typeof r.datos === 'object' ? r.datos : { id: r.id }); });
+    }
+    COLS.forEach(c => emitir(c));
+    purgar();
+  })();
+  let TemporizadorPeriodico = setInterval(() => { if (document.visibilityState === 'visible' && vivo && navigator.onLine !== false) { mezclar(false).catch(() => {}); try { localStorage.setItem(NUBE_FECHA_ULTIMA, String(Date.now())); } catch (e) {} } }, 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') mezclar(false).catch(() => {}); });
+  return {
+    nube: true, negocio: { id: negId, nombre: negocioFila.nombre || '', codigo: negocioFila.codigo },
+    repicar: mezclar,
+    cerrar() { vivo = false; clearInterval(TemporizadorPeriodico); Object.keys(oyentes).forEach(k => delete oyentes[k]); },
+    collection(tipo) {
+      return {
+        doc(id) { return {
+          set: async o => { try { await subirRow(tipo, o); emitir(tipo); } catch (e) { pendAdd({ op: 'subir', tipo, id, datos: o, intentos: 0 }); throw e; } },
+          delete: async () => { try { await borrarRow(tipo, id); emitir(tipo); } catch (e) { pendAdd({ op: 'borrar', tipo, id, intentos: 0 }); } }
+        }; },
+        onSnapshot(cb, err) { (oyentes[tipo] = oyentes[tipo] || []).push(cb); inicial.then(() => { try { cb(snapDe(tipo)); } catch (e) { if (err) err({ code: 'nube' }); } }).catch(() => { if (err) err({ code: 'nube' }); }); }
+      };
+    }
+  };
+}
+/* Conecta a la nube con lo que ya está guardado; devuelve true si quedó conectado */
+async function conectarNube() {
+  const cfg = nbCfg(), cta = nbCta();
+  let neg = nbNeg();
+  if (!cfg || !cta) return false;
+  let sesion = cta;
+  try { if (navigator.onLine === false) return false; }
+  catch (e) {}
+  try {
+    if (!sesion.access) return false;
+    sesion = await sbRenovar(cfg, cta).catch(() => null);
+    if (!sesion) { nbSet(NBK_S, null); return false; }
+    /* Si el teléfono no recuerda el negocio (sesión nueva, otro equipo, se salió de la cuenta), se lo pedimos al servidor */
+    if (!neg || !neg.id) {
+      const id = await negocioDelServidor(cfg, sesion.access);
+      if (!id) return false;
+      neg = { id }; nbSet(NBK_NG, neg);
+    }
+    const nueva = await crearSupabaseDB(cfg, sesion, neg);
+    if (DB && DB.cerrar) DB.cerrar();
+    DB = nueva;
+    try { localStorage.setItem(NUBE_FECHA_ULTIMA, String(Date.now())); } catch (e) {}
+    marcaSync(true);;
+    COLS.forEach(c => nueva.collection(c).onSnapshot(snap => { S[c] = snap.docs.map(d => d.data()); pintar(); }, err => { if (err && err.code === 'revoked') { if (DB.cerrar) DB.cerrar(); DB = null; marcaSync(false); } }));
+    return true;
+  } catch (e) { return false; }
+}
+/* Área de manejo desde Ajustes */
+function formNube() {
+  const c = nbCfg(), ses = nbCta(), neg = nbNeg();
+  const estado = !c ? 'Todavía no hay conexión a la nube.' : !ses ? 'Conexión lista. Falta entrar con tu cuenta.' : !neg ? 'Cuenta lista. Te falta crear tu negocio o unirte con un código.' : 'Conectado a la nube.';
+  const personalizada = c && String(c.url) !== NUBE_DE_FABRICA.url;
+  if (ses) {
+    abrir(`<h2>Guardado en la nube</h2><p class="small muted" style="margin:0 0 10px">Comparte tus datos entre tu teléfono y tu computadora, y con quien tú quieras (ej. tu esposa o socios). Cada negocio queda privado: nadie ve los datos de otro.</p>
+    <p class="small" style="margin:0 0 10px"><b>Estado:</b> ${esc(estado)}</p>
+    <div class="panel" style="margin-bottom:12px"><div class="row" style="border-top:none;padding:12px 0"><span class="pill ok">En línea</span><div class="main"><div class="t">${esc(ses.email || 'Cuenta entrada')}</div><div class="s">${neg ? `Negocio: ${esc(neg.nombre || '')} · Código de invitación: ${esc(neg.codigo || '')}` : 'Sin negocio todavía'}</div></div></div>
+    ${neg ? '' : `<div class="f" style="margin-top:8px">
+      <div class="full"><label for="f-nb-nombre">Nombre del negocio</label><input id="f-nb-nombre" type="text" placeholder="Ej: Boutique Ana"></div>
+      <div class="full"><button class="btn pri" data-act="nube-crear">Crear mi negocio</button></div>
+      <p class="small muted" style="margin:4px 0 2px">— o si alguien ya te invitó —</p>
+      <div class="full"><label for="f-nb-codigo">Código del negocio</label><input id="f-nb-codigo" type="text" placeholder="Ej: 8AF3DE"></div>
+      <div class="full"><button class="btn" data-act="nube-unirme">Unirme con código</button></div>
+    </div>`}
+    ${neg ? `<p class="small muted" style="margin:6px 0 0">Invita a alguien con el código <b>${esc(neg.codigo || '')}</b>: la otra persona se registra con su correo, abre esta misma pantalla, elige <b>Unirme con código</b> y pega el tuyo.</p>` : ''}</div>
+    <div class="foot"><button class="btn" data-act="nube-salir">Salir de la cuenta</button><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
+    return;
+  }
+  abrir(`<h2>Guardado en la nube</h2><p class="small muted" style="margin:0 0 10px">Comparte tus datos entre tu teléfono y tu computadora, y con quien tú quieras (ej. tu esposa o socios). Cada negocio queda privado: nadie ve los datos de otro.</p>
+  <p class="small" style="margin:0 0 10px"><b>Estado:</b> ${esc(estado)}</p>
+  <div class="f">
+    <div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>
+    <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres"></div>
+    <div class="full"><button class="btn pri" data-act="nube-entrar">Entrar / Crear cuenta</button></div>
+    <p class="small muted" style="margin:2px 0 8px">Si es tu primera vez, esta misma casilla crea tu cuenta automáticamente.</p>
+  </div>
+  <details style="margin:6px 0 4px"><summary class="small muted" style="cursor:pointer">⚙️ Opción avanzada: cambiar de servidor</summary>
+    <div class="f" style="margin-top:8px">
+      <div class="full"><label for="f-nb-url">URL de tu proyecto Supabase</label><input id="f-nb-url" type="url" placeholder="${esc(NUBE_DE_FABRICA.url)}" value="${personalizada ? esc(c.url) : ''}"></div>
+      <div class="full"><label for="f-nb-key">Clave pública (anon / publishable)</label><input id="f-nb-key" type="text" placeholder="sb_publishable_… o eyJ…" value="${personalizada ? esc(c.key) : ''}"></div>
+      <div class="full"><button class="btn sm" data-act="nube-config">Guardar conexión</button></div>
+      ${personalizada ? `<div class="full"><button class="btn sm" data-act="nube-fabrica">Volver al servidor de la app</button></div>` : ''}
+    </div>
+  </details>
+  <div class="foot"><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
 }
 
 /* ----- respaldos: recordatorio, contador de cambios y copias automáticas del teléfono ----- */
@@ -319,14 +555,14 @@ function copiasGuardar(l) {
 }
 /* Una copia al empezar cada día (últimos 7 días): sirve para deshacer errores. No reemplaza el respaldo fuera del teléfono. */
 function copiaDelDia() {
-  if (DB || !DATA_COLS.some(c => S[c].length)) return;
+  if ((DB && !DB.local) || !DATA_COLS.some(c => S[c].length)) return;
   const f = hoy(), l = copiasLeer(); if (l.some(x => x.t === 'dia' && x.f === f)) return;
   const d = JSON.stringify(S); if (d.length > 1500000) return;
   const dias = l.filter(x => x.t === 'dia'); dias.push({t: 'dia', f, d}); dias.sort((a, b) => a.f < b.f ? -1 : 1);
   copiasGuardar([...l.filter(x => x.t === 'antes'), ...dias.slice(-7)]);
 }
 function copiaAntes() {
-  if (DB) return; const d = JSON.stringify(S); if (d.length > 1500000) return;
+  if (DB && !DB.local) return; const d = JSON.stringify(S); if (d.length > 1500000) return;
   copiasGuardar([...copiasLeer().filter(x => x.t === 'dia'), {t: 'antes', f: hoy(), d}]);
 }
 function respaldoActualAntesRestaurar() { copiaAntes(); }
@@ -541,6 +777,7 @@ function vInicio(cobros) {
     <div class="kpi"><div class="l">Préstamos activos</div><div class="v">${activos}</div></div>
     <div class="kpi"><div class="l">Productos con poco stock</div><div class="v">${S.productos.filter(stockBajo).length}</div></div>
   </div>
+  ${graficoVentasMes()}
   <div class="grid two sec">
     <div><h2>Avisos</h2><div class="panel">${al.length ? al.slice(0, 8).map(a => `<div class="row"><span class="pill ${a.cls}">${a.tag}</span><div class="main"><div class="t">${esc(a.t)}</div><div class="s">${esc(a.s)}</div></div></div>`).join('') : vacio('Todo en orden', 'No hay pagos atrasados ni productos por reponer.')}</div>
     ${al.length > 8 ? `<p class="small muted">Y ${al.length - 8} avisos más en Cobros e Inventario.</p>` : ''}</div>
@@ -552,6 +789,26 @@ function masVendidos() {
   const desde = sumaDias(hoy(), -30), m = {};
   S.ventas.filter(v => v.fecha >= desde).forEach(v => v.items.forEach(i => { m[i.nombre] = (m[i.nombre] || 0) + i.cant; }));
   return Object.entries(m).map(([nombre, cant]) => ({nombre, cant})).sort((a, b) => b.cant - a.cant).slice(0, 5);
+}
+/* Columnas: total vendido en cada día de este mes */
+function ventasMes() {
+  const h = hoy(), d0 = h.slice(0, 8) + '01', pd = parse(d0);
+  const finMes = new Date(pd.getFullYear(), pd.getMonth() + 1, 0);
+  const ndias = finMes.getDate(), maxdia = finMes.getMonth() === parse(h).getMonth() && ndias > parse(h).getDate() ? parse(h).getDate() : ndias;
+  const porDia = {};
+  S.ventas.forEach(v => { if (v.fecha >= d0 && v.fecha <= h) porDia[v.fecha] = (porDia[v.fecha] || 0) + (+v.total || 0); });
+  const dias = [];
+  for (let i = 1; i <= maxdia; i++) { const f = d0.slice(0, 8) + pad(i); dias.push({ f, monto: porDia[f] || 0, hoy: f === h }); }
+  return { dias, total: +Object.values(porDia).reduce((a, b) => a + b, 0).toFixed(2), maxdia };
+}
+function graficoVentasMes() {
+  const { dias, total } = ventasMes();
+  const mx = Math.max(1, ...dias.map(d => d.monto));
+  const col = d => `<div class="col${d.hoy ? ' hoy' : ''}${d.monto ? '' : ' s0'}" title="${fmtF(d.f)}${d.monto ? ': ' + money(d.monto) : ''}"><b style="--h:${Math.max(4, Math.round(d.monto / mx * 100))}%"></b></div>`;
+  const etq = d => { const n = parse(d.f).getDate(); return [1, 5, 10, 15, 20, 25, 30].includes(n) ? `<u${d.hoy ? ' style="color:var(--accent);font-weight:700"' : ''}>${n}</u>` : '<u></u>'; };
+  const agenda = dias.length ? `<div class="chart" style="--n:${dias.length}">${dias.map(col).join('')}</div><div class="dias small muted">${dias.map(etq).join('')}</div>` : vacio('Aún sin ventas', 'Aquí verás los días que más vendiste.');
+  const totalDiv = total ? `<p class="small muted" style="margin:8px 0 0">Total vendido este mes: <b>${money(total)}</b></p>` : '';
+  return `<div style="margin-top:12px"><h2>🛒 Ventas del mes</h2><div class="panel">${agenda}${totalDiv}</div></div>`;
 }
 function alertas(cobros) {
   const a = [];
@@ -1142,6 +1399,8 @@ function formAjustes() {
     ${RECS.map(([k, nombre, tit, ej]) => `<div class="full" style="border-top:1px solid var(--line);padding-top:10px"><b>${nombre}</b></div>
       ${fld('t-' + k, 'Título del recibo', (c.r && c.r[k] && c.r[k].titulo) || '', 'text', `placeholder="${esc(tit)}"`, 'full')}
       ${area('x-' + k, 'Texto fijo (garantía, condiciones…)', (c.r && c.r[k] && c.r[k].texto) || '', ej)}`).join('')}
+    <div class="full" style="border-top:1px solid var(--line);padding-top:10px"><h3 style="font-size:15px;margin:0 0 4px">Guardado en la nube</h3><p class="small muted" style="margin:0 0 8px">Comparte y respalda tus datos entre teléfonos y computadoras. ${nbCta() && nbNeg() ? '<b>Conectado</b>.' : 'Todavía sin conectar.'}</p>
+      <button class="btn sm pri" data-act="nube">Configurar nube</button></div>
     <div class="full" style="border-top:1px solid var(--line);padding-top:10px"><h3 style="font-size:15px;margin:0 0 4px">Seguridad</h3><p class="small muted" style="margin:0 0 8px">${pinGet() ? 'El PIN está activado.' : 'Protege la app con un PIN para que nadie vea tus clientes ni tus cobros.'}</p>
       ${pinGet() ? '<button class="btn sm" data-act="pin-cambiar">Cambiar PIN</button> <button class="btn sm danger" data-act="pin-quitar">Quitar PIN</button>' : '<button class="btn sm pri" data-act="pin-activar">Activar PIN</button>'}</div></div>
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-ajustes">Guardar</button></div>`);
@@ -1429,7 +1688,7 @@ function infoRespaldo() {
   const ult = dias === null ? 'Aún no has hecho ninguno.' : dias === 0 ? 'Hoy.' : `Hace ${dias} ${dias === 1 ? 'día' : 'días'}.`;
   const l = copiasLeer().map((c, i) => ({...c, i})).filter(c => c.t === 'antes' || c.f).sort((a, b) => (a.t === 'antes') - (b.t === 'antes') || (a.f < b.f ? 1 : -1));
   return `<p class="small" style="margin:10px 0 0"><b>Último respaldo guardado fuera de la app:</b> ${ult} La app te lo recordará cada semana.</p>
-  ${DB ? '' : `<h3 style="font-size:15px;margin:14px 0 4px">Copias automáticas en este teléfono</h3>
+  ${(DB && !DB.local) ? '' : `<h3 style="font-size:15px;margin:14px 0 4px">Copias automáticas en este teléfono</h3>
   <p class="small muted" style="margin:0 0 6px">La app guarda sola una copia al empezar cada día (los últimos 7). Sirven para deshacer un error, pero <b>si desinstalas la app se pierden</b>: no reemplazan el respaldo de arriba.</p>
   <div class="panel">${l.length ? l.map(c => `<div class="row"><div class="main"><div class="t">${c.t === 'antes' ? 'Antes de la última restauración' : fmtF(c.f)}</div></div><div class="acts"><button class="btn sm" data-act="copia-restaurar" data-i="${c.i}">Volver a esta</button></div></div>`).join('') : '<div class="empty small">Todavía no hay copias. Se crean al abrir la app con datos.</div>'}</div>`}`;
 }
@@ -1599,6 +1858,74 @@ const ACT = {
   tipos: () => formTipos(), 'nuevo-tipo': () => formTipo(), 'edit-tipo': el => formTipo(el.dataset.id), 'save-tipo': el => saveTipo(el.dataset.id),
   'del-tipo': async el => { await borrar('tipos', el.dataset.id); formTipos(); },
   ajustes: () => formAjustes(), 'save-ajustes': () => saveAjustes(),
+  nube: () => formNube(),
+  'nube-config': () => {
+    const url = v$('nb-url'), key = v$('nb-key');
+    if (!url || !key) return aviso('Pega la URL y la clave pública de tu proyecto.');
+    nbSet(NBK, { url: url.trim(), key: key.trim() });
+    aviso('Conexión a la nube guardada'); formNube();
+  },
+  'nube-fabrica': () => { nbSet(NBK, null); aviso('Servidor de la app restaurado'); formNube(); },
+  'nube-entrar': async () => {
+    const cfg = nbCfg(); if (!cfg) return aviso('Primero guarda la conexión (URL y clave).');
+    const email = v$('nb-email'), pass = v$('nb-pass');
+    if (!email || !pass) return aviso('Escribe tu correo y contraseña.');
+    aviso('Entrando…');
+    try {
+      let s = await sbEntrar(cfg, email, pass).catch(er => {
+        const m = String(er && er.message || er || '');
+        if (/Invalid login credentials|Email not confirmed/i.test(m)) { if (!/Email not confirmed/i.test(m)) throw er;
+          throw new Error('Confirma tu correo con el enlace que te envió Supabase y vuelve a intentar.'); }
+        if (/User already registered/i.test(m)) throw new Error('Ese correo ya tiene cuenta: usa la contraseña con la que la creaste.');
+        return sbCrear(cfg, email, pass).catch(e2 => { const m2 = String(e2 && e2.message || e2 || ''); if (!/Password should be at least|invalid/i.test(m2)) { throw new Error(m2 || m); } throw e2; });
+      });
+      nbSet(NBK_S, { ...s, email });
+      /* ¿Esta cuenta ya tiene negocio en el servidor? Entonces se conecta a ese, sin pedir crear otro */
+      try {
+        const id = await negocioDelServidor(cfg, s.access);
+        if (id) {
+          nbSet(NBK_NG, { id });
+          cerrar();
+          const ok = await conectarNube();
+          return aviso(ok ? 'Entraste y quedaste conectado a tu negocio' : 'Cuenta lista, pero no se pudo conectar: revisa tu conexión');
+        }
+      } catch (e2) {}
+      aviso('Cuenta lista'); formNube();
+    } catch (e) { aviso('No se pudo entrar: ' + (e && e.message || e)); }
+  },
+  'nube-crear': async () => {
+    const cfg = nbCfg(), ses = nbCta(); if (!cfg || !ses) return aviso('Entra con tu cuenta primero.');
+    const nombre = v$('nb-nombre'); if (!nombre) return aviso('Escribe el nombre del negocio.');
+    try {
+      const nueva = await sbRenovar(cfg, ses);
+      const id = await sbApi(cfg, '/rest/v1/rpc/crear_mi_negocio', { body: JSON.stringify({ nombre: nombre.trim() }) }, nueva.access);
+      nbSet(NBK_NG, { id: id, nombre: nombre.trim() });
+      aviso('Negocio creado'); cerrar(); await conectarNube().then(ok => aviso(ok ? '¡Ahora tus datos quedan en la nube y se comparten!' : 'No se pudo conectar: revisa tu conexión'));
+    } catch (e) {
+      if (/Ya perteneces|negocio_actual/i.test(String(e && e.message))) {
+        /* Esta cuenta ya tiene negocio en el servidor: en vez de dar error, se conecta a él */
+        nbSet(NBK_NG, null); cerrar(); aviso('Esta cuenta ya tiene un negocio; conectando…');
+        const ok = await conectarNube(); aviso(ok ? 'Conectado a tu negocio' : 'No se pudo conectar: revisa tu conexión');
+      } else aviso('No se pudo crear: ' + (e && e.message || e));
+    }
+  },
+  'nube-unirme': async () => {
+    const cfg = nbCfg(), ses = nbCta(); if (!cfg || !ses) return aviso('Entra con tu cuenta primero.');
+    const codigo = v$('nb-codigo'); if (!codigo) return aviso('Escribe el código que te compartieron.');
+    try {
+      const nueva = await sbRenovar(cfg, ses);
+      const id = await sbApi(cfg, '/rest/v1/rpc/unirme_con_codigo', { body: JSON.stringify({ p_codigo: codigo.trim() }) }, nueva.access);
+      if (!id) return aviso('Ese código no corresponde a ningún negocio.');
+      nbSet(NBK_NG, { id: id });
+      aviso('¡Bienvenido al negocio!'); cerrar(); await conectarNube().then(ok => aviso(ok ? 'Conectado: comparten los mismos datos' : 'No se pudo conectar'));
+    } catch (e) {
+      if (/Ya perteneces/i.test(String(e && e.message))) {
+        nbSet(NBK_NG, null); cerrar(); aviso('Esta cuenta ya pertenece a un negocio; conectando…');
+        const ok = await conectarNube(); aviso(ok ? 'Conectado a tu negocio' : 'No se pudo conectar: revisa tu conexión');
+      } else aviso('No se pudo unir: ' + (e && e.message || e));
+    }
+  },
+  'nube-salir': () => { nbSet(NBK_S, null); nbSet(NBK_NG, null); aviso('Saliste de la cuenta'); formNube(); },
   'pin-activar': () => formPin('activar'), 'pin-cambiar': () => formPin('cambiar'), 'pin-quitar': () => formPin('quitar'), 'save-pin': el => savePin(el.dataset.modo),
   respaldo: () => formRespaldo(), 'respaldo-luego': () => { metaSet({pospuesto: hoy()}); pintar(); }, 'copia-restaurar': el => restaurarCopia(+el.dataset.i),
   'bk-xlsx': () => descargar(construirXlsx(), `respaldo-${hoy()}.xlsx`),
@@ -1659,10 +1986,26 @@ function marcaSync(nube) {
 }
 async function arrancar() {
   $('#view').innerHTML = '<div class="panel"><div class="empty">Cargando tus datos…</div></div>';
+  /* Verifica la llave: si lleva muchas seses sin iniciar sesión (cuenta cerrada, servidor caído, o sin red sostenida), se borra todo y se pide acceso */
+  /* Datos: guardados siempre. Solo se bloquea la pantalla hasta que el dueño autorice de nuevo. */
+  const fm = Number(localStorage.getItem(NUBE_FECHA_ULTIMA) || '0');
+  if (fm && (Date.now() - fm) / 86400000 > DIAS_SIN_SESION_PARA_BLOQUEAR) {
+    try { sessionStorage.setItem('mnad-bloqueo-activo', '1'); localStorage.removeItem(NBK_S); localStorage.removeItem(NBK_NG); } catch (e) {}
+  }
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
+  /* Con sesión guardada: conecta por el camino que renueva el token y consulta el negocio al servidor (antes usaba un token vencido y caía en modo local) */
+  if (!db && nbCta()) { try { if (await conectarNube()) return; } catch (e) {} }
+  if (db) { DB = db; marcaSync(true);
+    const listos = new Set(); let pintado = false;
+    const mostrar = () => { pintado = true; pintar(); };
+    setTimeout(() => { if (!pintado) mostrar(); }, 5000);
+    COLS.forEach(c => db.collection(c).onSnapshot(snap => { S[c] = snap.docs.map(d => d.data()); listos.add(c); if (listos.size === COLS.length || pintado) mostrar(); }, err => { if (err && err.code === 'revoked') { if (DB.cerrar) DB.cerrar(); DB = null; marcaSync(false); } }));
+    return;
+  }
+  db = await crearLocalDB();
   if (!db) { lsLoad(); copiaDelDia(); marcaSync(false); pintar(); return; }
-  DB = db; marcaSync(true);
+  DB = db; marcaSync(!db.local);
   const listos = new Set(); let pintado = false;
   const mostrar = () => { pintado = true; pintar(); };
   setTimeout(() => { if (!pintado) mostrar(); }, 4000);
@@ -1671,13 +2014,48 @@ async function arrancar() {
     listos.add(c);
     if (listos.size === COLS.length || pintado) mostrar();
   }, err => { if (err && err.code === 'revoked') { DB = null; marcaSync(false); } }));
+  /* Si el guardado pausó por límite de días, informa y manda a la pantalla de acceso (los datos quedan intactos) */
+  if (sessionStorage.getItem('mnad-guardado-pausado') === '1') {
+    try { sessionStorage.removeItem('mnad-guardado-pausado'); alert('Quedaste fuera: tu licencia cerró por tiempo.\n\nTus datos están guardados y seguros en este equipo.\nPide al dueño que te autorice e inicia sesión para continuar.'); } catch (e) {}
+  }
 }
 pintar = (orig => function () { try { orig(); } catch (e) { console.error(e); } })(pintar);
 iniciarBloqueo();
 if (ES_APP) document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[target="_blank"]'); if (a && a.href) { e.preventDefault(); location.href = a.href; } }, true);
 arrancar();
 /* Sin internet: guarda la app en el equipo y pide que el navegador no borre los datos */
-if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+/* Banner de actualización: si hay versión nueva guardada, aviso con botón "Actualizar" */
+if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const mostrarBanner = () => {
+      if (document.getElementById('aviso-actualizar')) return;
+      const b = document.createElement('div');
+      b.id = 'aviso-actualizar'; b.className = 'nueva-ver';
+      b.innerHTML = '<span>📦 Hay una versión nueva de la app</span><button class="btn pri" data-cc="actualizar">Actualizar</button>';
+      b.addEventListener('click', e => {
+        if (!e.target.closest('[data-cc="actualizar"]')) return;
+        try { postMessage('skip');
+          if (reg.waiting && reg.waiting.postMessage) reg.waiting.postMessage('skip');
+          if (reg.active && reg.active.postMessage) reg.active.postMessage('skip');
+        } catch (err) {}
+        // Si tarda más de 3 s en activar, recarga igual
+        setTimeout(() => location.reload(), 3000);
+      });
+      document.body.appendChild(b);
+    };
+    if (reg.waiting) mostrarBanner();
+    reg.addEventListener('updatefound', () => {
+      const sw = reg.installing;
+      if (!sw) return;
+      sw.addEventListener('statechange', () => { if (sw.state === 'installed' && navigator.serviceWorker.controller) mostrarBanner(); });
+    });
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (window.__recargando) return; window.__recargando = true; location.reload();
+  });
+} else if ('serviceWorker' in navigator) { try {} catch (e) {} }
+/* Al volver la red, si la nube está configurada y sigo en modo local, me reconecto */
+window.addEventListener('online', async () => { if (!window.claude && DB && DB.local && nbCfg() && nbCta()) { const ok = await conectarNube(); if (ok) aviso('De vuelta en la nube'); } });
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
 </script>
 
