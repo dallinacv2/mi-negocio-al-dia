@@ -2052,21 +2052,6 @@ if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('htt
   }).catch(() => {});
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (window.__recargando) return; window.__recargando = true; location.reload();
-  });
-} else if ('serviceWorker' in navigator) { try {} catch (e) {} }
-/* Al volver la red, si la nube está configurada y sigo en modo local, me reconecto */
-window.addEventListener('online', async () => { if (!window.claude && DB && DB.local && nbCfg() && nbCta()) { const ok = await conectarNube(); if (ok) aviso('De vuelta en la nube'); } });
-try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
-</script>
-<script src="./app-updater.js"></script>
-<script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').then(() => {
-      console.log('Service Worker registrado');
-    }).catch(err => {
-      console.warn('No se pudo registrar el SW:', err);
-    });
-  }
 <script src="./app-updater.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
