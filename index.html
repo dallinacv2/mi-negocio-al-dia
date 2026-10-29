@@ -2067,5 +2067,14 @@ try { if (navigator.storage && navigator.storage.persist) navigator.storage.pers
       console.warn('No se pudo registrar el SW:', err);
     });
   }
+<script src="./app-updater.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').then(() => {
+      console.log('Service Worker registrado');
+    }).catch(err => {
+      console.warn('No se pudo registrar el SW:', err);
+    });
+  }
 </script>
 </body></html>
