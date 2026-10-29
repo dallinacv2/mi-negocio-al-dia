@@ -142,6 +142,11 @@ input,select,textarea{background:var(--surface);border:1px solid var(--line);bor
 .preview{background:var(--accent-soft);border-radius:6px;padding:10px 12px;font-size:14px}
 .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
 .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(14px + env(safe-area-inset-top,0px));max-width:calc(100vw - 32px);text-align:center;background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:6px;z-index:60;font-size:14px}
+/* Banner de actualización: avisa que hay versión nueva y ofrece instalar */
+.nueva-ver{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--line);color:var(--ink);padding:12px 14px;border-radius:10px;z-index:70;box-shadow:0 16px 40px -20px rgba(0,0,0,.45);font-size:14px}
+.nueva-ver span{line-height:1.4}
+.nueva-ver button{flex-shrink:0}
+.nueva-ver [data-cc="actualizar"]{white-space:nowrap}
 table{border-collapse:collapse;width:100%} th,td{text-align:left;padding:8px 10px;border-top:1px solid var(--line);font-size:14px}
 th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-top:0}
 .scroll{overflow-x:auto}
@@ -1940,7 +1945,36 @@ iniciarBloqueo();
 if (ES_APP) document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[target="_blank"]'); if (a && a.href) { e.preventDefault(); location.href = a.href; } }, true);
 arrancar();
 /* Sin internet: guarda la app en el equipo y pide que el navegador no borre los datos */
-if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+/* Banner de actualización: si hay versión nueva guardada, aviso con botón "Actualizar" */
+if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const mostrarBanner = () => {
+      if (document.getElementById('aviso-actualizar')) return;
+      const b = document.createElement('div');
+      b.id = 'aviso-actualizar'; b.className = 'nueva-ver';
+      b.innerHTML = '<span>📦 Hay una versión nueva de la app</span><button class="btn pri" data-cc="actualizar">Actualizar</button>';
+      b.addEventListener('click', e => {
+        if (!e.target.closest('[data-cc="actualizar"]')) return;
+        try { postMessage('skip');
+          if (reg.waiting && reg.waiting.postMessage) reg.waiting.postMessage('skip');
+          if (reg.active && reg.active.postMessage) reg.active.postMessage('skip');
+        } catch (err) {}
+        // Si tarda más de 3 s en activar, recarga igual
+        setTimeout(() => location.reload(), 3000);
+      });
+      document.body.appendChild(b);
+    };
+    if (reg.waiting) mostrarBanner();
+    reg.addEventListener('updatefound', () => {
+      const sw = reg.installing;
+      if (!sw) return;
+      sw.addEventListener('statechange', () => { if (sw.state === 'installed' && navigator.serviceWorker.controller) mostrarBanner(); });
+    });
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (window.__recargando) return; window.__recargando = true; location.reload();
+  });
+} else if ('serviceWorker' in navigator) { try {} catch (e) {} }
 /* Al volver la red, si la nube está configurada y sigo en modo local, me reconecto */
 window.addEventListener('online', async () => { if (!window.claude && DB && DB.local && nbCfg() && nbCta()) { const ok = await conectarNube(); if (ok) aviso('De vuelta en la nube'); } });
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
