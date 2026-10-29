@@ -117,6 +117,14 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
 .pill.bad{background:var(--bad-soft);color:var(--bad)} .pill.neu{background:var(--accent-soft);color:var(--accent)}
 .bar{height:6px;border-radius:999px;background:var(--line);overflow:hidden;margin-top:8px}
 .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent) 0%,#22d3ee 100%)}
+/* Gráfico de columnas: ventas de cada día del mes */
+.chart{display:flex;align-items:flex-end;gap:3px;height:92px;padding:10px 4px 0}
+.chart .col{flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;min-width:0}
+.chart .col b{display:block;height:var(--h,0%);min-height:2px;border-radius:3px 3px 0 0;background:linear-gradient(180deg,var(--accent) 0%,#22d3ee 100%)}
+.chart .col.hoy b{background:linear-gradient(180deg,#0ea5a4 0%,#34d399 100%)}
+.chart .col.s0 b{background:none}
+.chart .dias{display:flex;gap:3px;padding-top:6px}
+.chart .dias u{flex:1;text-decoration:none;min-width:0;overflow:hidden;text-align:center}
 
 /* controles */
 .btn{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:8px 14px;cursor:pointer;font-weight:500;box-shadow:0 1px 1px rgba(15,22,28,.01)}
@@ -742,6 +750,7 @@ function vInicio(cobros) {
     <div class="kpi"><div class="l">Préstamos activos</div><div class="v">${activos}</div></div>
     <div class="kpi"><div class="l">Productos con poco stock</div><div class="v">${S.productos.filter(stockBajo).length}</div></div>
   </div>
+  ${graficoVentasMes()}
   <div class="grid two sec">
     <div><h2>Avisos</h2><div class="panel">${al.length ? al.slice(0, 8).map(a => `<div class="row"><span class="pill ${a.cls}">${a.tag}</span><div class="main"><div class="t">${esc(a.t)}</div><div class="s">${esc(a.s)}</div></div></div>`).join('') : vacio('Todo en orden', 'No hay pagos atrasados ni productos por reponer.')}</div>
     ${al.length > 8 ? `<p class="small muted">Y ${al.length - 8} avisos más en Cobros e Inventario.</p>` : ''}</div>
@@ -753,6 +762,26 @@ function masVendidos() {
   const desde = sumaDias(hoy(), -30), m = {};
   S.ventas.filter(v => v.fecha >= desde).forEach(v => v.items.forEach(i => { m[i.nombre] = (m[i.nombre] || 0) + i.cant; }));
   return Object.entries(m).map(([nombre, cant]) => ({nombre, cant})).sort((a, b) => b.cant - a.cant).slice(0, 5);
+}
+/* Columnas: total vendido en cada día de este mes */
+function ventasMes() {
+  const h = hoy(), d0 = h.slice(0, 8) + '01', pd = parse(d0);
+  const finMes = new Date(pd.getFullYear(), pd.getMonth() + 1, 0);
+  const ndias = finMes.getDate(), maxdia = finMes.getMonth() === parse(h).getMonth() && ndias > parse(h).getDate() ? parse(h).getDate() : ndias;
+  const porDia = {};
+  S.ventas.forEach(v => { if (v.fecha >= d0 && v.fecha <= h) porDia[v.fecha] = (porDia[v.fecha] || 0) + (+v.total || 0); });
+  const dias = [];
+  for (let i = 1; i <= maxdia; i++) { const f = d0.slice(0, 8) + pad(i); dias.push({ f, monto: porDia[f] || 0, hoy: f === h }); }
+  return { dias, total: +Object.values(porDia).reduce((a, b) => a + b, 0).toFixed(2), maxdia };
+}
+function graficoVentasMes() {
+  const { dias, total } = ventasMes();
+  const mx = Math.max(1, ...dias.map(d => d.monto));
+  const col = d => `<div class="col${d.hoy ? ' hoy' : ''}${d.monto ? '' : ' s0'}" title="${fmtF(d.f)}${d.monto ? ': ' + money(d.monto) : ''}"><b style="--h:${Math.max(4, Math.round(d.monto / mx * 100))}%"></b></div>`;
+  const etq = d => { const n = parse(d.f).getDate(); return [1, 5, 10, 15, 20, 25, 30].includes(n) ? `<u${d.hoy ? ' style="color:var(--accent);font-weight:700"' : ''}>${n}</u>` : '<u></u>'; };
+  const agenda = dias.length ? `<div class="chart" style="--n:${dias.length}">${dias.map(col).join('')}</div><div class="dias small muted">${dias.map(etq).join('')}</div>` : vacio('Aún sin ventas', 'Aquí verás los días que más vendiste.');
+  const totalDiv = total ? `<p class="small muted" style="margin:8px 0 0">Total vendido este mes: <b>${money(total)}</b></p>` : '';
+  return `<div style="margin-top:12px"><h2>🛒 Ventas del mes</h2><div class="panel">${agenda}${totalDiv}</div></div>`;
 }
 function alertas(cobros) {
   const a = [];
