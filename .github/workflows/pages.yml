@@ -37,7 +37,7 @@ jobs:
       - name: Escribir la versión en la app
         run: sed -i "s/__BUILD__/$BUILD/g" index.html sw.js
 
-      - name: Copiar la web a www (fuente única: la raíz)
+      - name: Copiar la web a www (fuente única)
         run: cp index.html www/index.html && cp sw.js www/sw.js
 
       - name: Subir la carpeta www
