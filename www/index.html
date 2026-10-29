@@ -1904,9 +1904,10 @@ function marcaSync(nube) {
 async function arrancar() {
   $('#view').innerHTML = '<div class="panel"><div class="empty">Cargando tus datos…</div></div>';
   /* Verifica la llave: si lleva muchas seses sin iniciar sesión (cuenta cerrada, servidor caído, o sin red sostenida), se borra todo y se pide acceso */
+  /* Datos: guardados siempre. Solo se bloquea la pantalla hasta que el dueño autorice de nuevo. */
   const fm = Number(localStorage.getItem(NUBE_FECHA_ULTIMA) || '0');
   if (fm && (Date.now() - fm) / 86400000 > DIAS_SIN_SESION_PARA_BLOQUEAR) {
-    try { sessionStorage.setItem('mnad-bloqueo', '1'); localStorage.removeItem(NBK_S); localStorage.removeItem(NBK_NG); localStorage.removeItem('mnad-v1'); localStorage.removeItem('mnad-meta'); } catch (e) {}
+    try { sessionStorage.setItem('mnad-bloqueo-activo', '1'); localStorage.removeItem(NBK_S); localStorage.removeItem(NBK_NG); } catch (e) {}
   }
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
@@ -1929,8 +1930,10 @@ async function arrancar() {
     listos.add(c);
     if (listos.size === COLS.length || pintado) mostrar();
   }, err => { if (err && err.code === 'revoked') { DB = null; marcaSync(false); } }));
-  /* Si la llave venció, abre la pantalla de acceso una vez cargada la app */
-  if (sessionStorage.getItem('mnad-bloqueo') === '1') { sessionStorage.removeItem('mnad-bloqueo'); setTimeout(() => formNube(), 300); }
+  /* Si el guardado pausó por límite de días, informa y manda a la pantalla de acceso (los datos quedan intactos) */
+  if (sessionStorage.getItem('mnad-guardado-pausado') === '1') {
+    try { sessionStorage.removeItem('mnad-guardado-pausado'); alert('Quedaste fuera: tu licencia cerró por tiempo.\n\nTus datos están guardados y seguros en este equipo.\nPide al dueño que te autorice e inicia sesión para continuar.'); } catch (e) {}
+  }
 }
 pintar = (orig => function () { try { orig(); } catch (e) { console.error(e); } })(pintar);
 iniciarBloqueo();
