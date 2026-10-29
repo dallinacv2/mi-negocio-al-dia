@@ -377,6 +377,7 @@ const NBK = 'mnad-nube', NBK_S = 'mnad-nube-sesion', NBK_NG = 'mnad-nube-negocio
 const NUBE_DE_FABRICA = { url: 'https://zjszzzpentkzijphyskm.supabase.co', key: 'sb_publishable_Q9GNwYdkPbauZOeU9wUa0A_6Shbr5Er' };
 const DIAS_SIN_SESION_PARA_BLOQUEAR = 30;
 const NUBE_FECHA_ULTIMA = 'mnad-sesion-ultimo';
+const WEB_URL = 'https://dallinacv2.github.io/mi-negocio-al-dia/';   /* a donde llevan los enlaces de los correos de Supabase */
 const SIN_NUBE = 'mnad-sin-nube';            /* la persona eligió "Usar sin conectar": no se le vuelve a preguntar al abrir */
 let NUBE_LISTA = Promise.resolve(false);      /* se cumple cuando la nube terminó de bajar los datos */
 const nbCfg = () => { try { const j = JSON.parse(localStorage.getItem(NBK) || 'null'); return (j && j.url && j.key) ? j : NUBE_DE_FABRICA; } catch (e) { return NUBE_DE_FABRICA; } };
@@ -520,11 +521,42 @@ function mostrarBienvenida() {
       <div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>
       <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres"></div>
       <div class="full"><button class="btn pri" data-act="nube-entrar" style="width:100%">Entrar o crear cuenta</button></div>
+      <div class="full" style="text-align:center"><button class="bienv-local" data-act="nube-olvide" style="margin:0">Olvidé mi contraseña</button></div>
     </div>
     <button class="bienv-local" data-act="bienv-local">Usar sin conectar</button>
     <p class="small muted" style="margin-top:4px">Sin conectar, tus datos quedan solo en ${ES_APP ? 'este teléfono' : 'este navegador'}. Puedes conectarte después desde Ajustes.</p>
   </div>`;
   d.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'f-nb-pass') { const b = d.querySelector('[data-act="nube-entrar"]'); if (b) b.click(); } });
+  document.body.appendChild(d);
+}
+/* ----- recuperar contraseña: el correo trae un enlace de vuelta a la web con la llave en la dirección (#access_token=…&type=recovery) ----- */
+let RECUP = null;
+function enlaceDeRecuperacion() {
+  let h; try { h = new URLSearchParams(location.hash.replace(/^#/, '')); } catch (e) { return false; }
+  const limpiar = () => { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} };
+  if (h.get('error') || h.get('error_code')) {
+    limpiar();
+    setTimeout(() => aviso('Ese enlace venció o ya se usó. Toca "Olvidé mi contraseña" para pedir otro.'), 600);
+    return false;
+  }
+  if (h.get('type') === 'recovery' && h.get('access_token')) {
+    RECUP = { access: h.get('access_token'), refresh: h.get('refresh_token') || '' };
+    limpiar(); mostrarNuevaClave(); return true;
+  }
+  return false;
+}
+function mostrarNuevaClave() {
+  cerrarBienvenida();
+  const d = document.createElement('div'); d.id = 'bienv';
+  d.innerHTML = `<div class="bienvbox" role="dialog" aria-modal="true" aria-label="Contraseña nueva">
+    <div class="lockbrand">Contraseña nueva</div>
+    <p class="small muted">Escribe la contraseña que quieres usar de ahora en adelante.</p>
+    <div class="f">
+      <div class="full"><label for="f-nb-nueva">Contraseña nueva</label><input id="f-nb-nueva" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres"></div>
+      <div class="full"><label for="f-nb-nueva2">Repítela</label><input id="f-nb-nueva2" type="password" autocomplete="new-password" placeholder="Igual que la anterior"></div>
+      <div class="full"><button class="btn pri" data-act="nube-nueva-clave" style="width:100%">Guardar contraseña</button></div>
+    </div></div>`;
+  d.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'f-nb-nueva2') { const b = d.querySelector('[data-act="nube-nueva-clave"]'); if (b) b.click(); } });
   document.body.appendChild(d);
 }
 /* Si lo guardado en este equipo no está en la nube (por ejemplo, al unirse a un negocio que ya tenía datos), ofrece subirlo. Solo agrega: nunca borra ni pisa lo que ya hay */
@@ -574,6 +606,7 @@ function formNube() {
     <div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>
     <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres"></div>
     <div class="full"><button class="btn pri" data-act="nube-entrar">Entrar / Crear cuenta</button></div>
+    <div class="full"><button class="btn sm" data-act="nube-olvide">Olvidé mi contraseña</button></div>
     <p class="small muted" style="margin:2px 0 8px">Si es tu primera vez, esta misma casilla crea tu cuenta automáticamente.</p>
   </div>
   <details style="margin:6px 0 4px"><summary class="small muted" style="cursor:pointer">⚙️ Opción avanzada: cambiar de servidor</summary>
@@ -1989,6 +2022,30 @@ const ACT = {
       } else aviso('No se pudo unir: ' + (e && e.message || e));
     }
   },
+  'nube-olvide': async () => {
+    const email = v$('nb-email'); if (!email) return aviso('Escribe tu correo arriba y toca otra vez "Olvidé mi contraseña".');
+    const cfg = nbCfg(); aviso('Enviando…');
+    try {
+      await sbApi(cfg, '/auth/v1/recover?redirect_to=' + encodeURIComponent(WEB_URL), { body: JSON.stringify({ email }) });
+      aviso('Si ese correo tiene cuenta, te enviamos un enlace. Ábrelo en este mismo teléfono y revisa también Spam.');
+    } catch (e) { aviso('No se pudo enviar: ' + (e && e.message || e)); }
+  },
+  'nube-nueva-clave': async () => {
+    const a = v$('nb-nueva'), b = v$('nb-nueva2');
+    if (a.length < 6) return aviso('La contraseña debe tener mínimo 6 caracteres.');
+    if (a !== b) return aviso('Las dos contraseñas no son iguales.');
+    if (!RECUP) return aviso('Ese enlace ya no sirve. Pide otro con "Olvidé mi contraseña".');
+    const cfg = nbCfg(); aviso('Guardando…');
+    try {
+      const u = await sbApi(cfg, '/auth/v1/user', { method: 'PUT', body: JSON.stringify({ password: a }) }, RECUP.access);
+      nbSet(NBK_S, { access: RECUP.access, refresh: RECUP.refresh, uid: u && u.id, email: u && u.email });
+      try { localStorage.removeItem(SIN_NUBE); } catch (e2) {}
+      RECUP = null; cerrarBienvenida();
+      const ok = await conectarNube();
+      aviso(ok ? 'Contraseña cambiada. Ya estás dentro.' : 'Contraseña cambiada.');
+      if (ok) ofrecerSubirLocal(); else if (nbCta() && !nbNeg()) formNube();
+    } catch (e) { aviso('No se pudo cambiar: ' + (e && e.message || e)); }
+  },
   'bienv-local': () => { try { localStorage.setItem(SIN_NUBE, '1'); } catch (e) {} cerrarBienvenida(); },
   'nube-salir': () => { nbSet(NBK_S, null); nbSet(NBK_NG, null); aviso('Saliste de la cuenta'); formNube(); },
   'pin-activar': () => formPin('activar'), 'pin-cambiar': () => formPin('cambiar'), 'pin-quitar': () => formPin('quitar'), 'save-pin': el => savePin(el.dataset.modo),
@@ -2050,6 +2107,7 @@ function marcaSync(nube) {
   $('#syncTxt').textContent = nube ? 'Guardado en la nube' : (ES_APP ? 'Guardando solo en este teléfono' : 'Guardando solo en este navegador');
 }
 async function arrancar() {
+  const enRecuperacion = enlaceDeRecuperacion();
   $('#view').innerHTML = '<div class="panel"><div class="empty">Cargando tus datos…</div></div>';
   /* Verifica la llave: si lleva muchas seses sin iniciar sesión (cuenta cerrada, servidor caído, o sin red sostenida), se borra todo y se pide acceso */
   /* Datos: guardados siempre. Solo se bloquea la pantalla hasta que el dueño autorice de nuevo. */
@@ -2069,7 +2127,7 @@ async function arrancar() {
     return;
   }
   /* Sin sesión guardada (y sin haber elegido "Usar sin conectar"): pantalla de bienvenida. La app local carga debajo, lista para usarse */
-  if (!window.claude && !nbCta() && !sinNube()) mostrarBienvenida();
+  if (!window.claude && !enRecuperacion && !nbCta() && !sinNube()) mostrarBienvenida();
   db = await crearLocalDB();
   if (!db) { lsLoad(); copiaDelDia(); marcaSync(false); pintar(); return; }
   DB = db; marcaSync(!db.local);
