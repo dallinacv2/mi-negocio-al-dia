@@ -389,6 +389,10 @@ const sbCrear = (cfg, email, pass) => sbApi(cfg, '/auth/v1/signup', { body: JSON
   return { access: s.access_token, refresh: s.refresh_token, uid: s.user && s.user.id };
 });
 const sbRefrescar = (cfg, refresh) => sbApi(cfg, '/auth/v1/token?grant_type=refresh_token', { body: JSON.stringify({ refresh_token: refresh }) }).then(s => ({ access: s.access_token, refresh: s.refresh_token, uid: '' }));
+/* Refresca el token y conserva lo que ya sabíamos de la cuenta (correo, uid). Supabase rota el refresh token: hay que guardar el nuevo. */
+const sbRenovar = async (cfg, ses) => { const r = await sbRefrescar(cfg, ses.refresh); const nueva = { ...ses, access: r.access, refresh: r.refresh || ses.refresh }; nbSet(NBK_S, nueva); return nueva; };
+/* La fuente de verdad del negocio es el servidor (tabla miembro), no lo que quedó guardado en el teléfono */
+const negocioDelServidor = (cfg, token) => sbApi(cfg, '/rest/v1/rpc/negocio_actual', { method: 'POST', body: '{}' }, token).then(id => (typeof id === 'string' && id) ? id : null);
 /* Cola de operaciones pendientes (cuando no había internet al guardar en la nube) */
 const pendLeer = () => { try { const l = JSON.parse(localStorage.getItem(NBK_PEND) || '[]'); return Array.isArray(l) ? l : []; } catch (e) { return []; } };
 const pendGuardar = l => nbSet(NBK_PEND, l.slice(-400));
@@ -458,16 +462,22 @@ async function crearSupabaseDB(cfg, sesion, neg) {
 }
 /* Conecta a la nube con lo que ya está guardado; devuelve true si quedó conectado */
 async function conectarNube() {
-  const cfg = nbCfg(), cta = nbCta(), neg = nbNeg();
+  const cfg = nbCfg(), cta = nbCta();
+  let neg = nbNeg();
   if (!cfg || !cta) return false;
   let sesion = cta;
   try { if (navigator.onLine === false) return false; }
   catch (e) {}
   try {
     if (!sesion.access) return false;
-    sesion = await sbRefrescar(cfg, sesion.refresh).catch(() => null);
+    sesion = await sbRenovar(cfg, cta).catch(() => null);
     if (!sesion) { nbSet(NBK_S, null); return false; }
-    nbSet(NBK_S, sesion);
+    /* Si el teléfono no recuerda el negocio (sesión nueva, otro equipo, se salió de la cuenta), se lo pedimos al servidor */
+    if (!neg || !neg.id) {
+      const id = await negocioDelServidor(cfg, sesion.access);
+      if (!id) return false;
+      neg = { id }; nbSet(NBK_NG, neg);
+    }
     const nueva = await crearSupabaseDB(cfg, sesion, neg);
     if (DB && DB.cerrar) DB.cerrar();
     DB = nueva;
@@ -1870,6 +1880,16 @@ const ACT = {
         return sbCrear(cfg, email, pass).catch(e2 => { const m2 = String(e2 && e2.message || e2 || ''); if (!/Password should be at least|invalid/i.test(m2)) { throw new Error(m2 || m); } throw e2; });
       });
       nbSet(NBK_S, { ...s, email });
+      /* ¿Esta cuenta ya tiene negocio en el servidor? Entonces se conecta a ese, sin pedir crear otro */
+      try {
+        const id = await negocioDelServidor(cfg, s.access);
+        if (id) {
+          nbSet(NBK_NG, { id });
+          cerrar();
+          const ok = await conectarNube();
+          return aviso(ok ? 'Entraste y quedaste conectado a tu negocio' : 'Cuenta lista, pero no se pudo conectar: revisa tu conexión');
+        }
+      } catch (e2) {}
       aviso('Cuenta lista'); formNube();
     } catch (e) { aviso('No se pudo entrar: ' + (e && e.message || e)); }
   },
@@ -1877,22 +1897,33 @@ const ACT = {
     const cfg = nbCfg(), ses = nbCta(); if (!cfg || !ses) return aviso('Entra con tu cuenta primero.');
     const nombre = v$('nb-nombre'); if (!nombre) return aviso('Escribe el nombre del negocio.');
     try {
-      nbSet(NBK_S, { ...ses, access: (await sbRefrescar(cfg, ses.refresh)).access });
-      const id = await sbApi(cfg, '/rest/v1/rpc/crear_mi_negocio', { body: JSON.stringify({ nombre: nombre.trim() }) }, nbCta().access);
+      const nueva = await sbRenovar(cfg, ses);
+      const id = await sbApi(cfg, '/rest/v1/rpc/crear_mi_negocio', { body: JSON.stringify({ nombre: nombre.trim() }) }, nueva.access);
       nbSet(NBK_NG, { id: id, nombre: nombre.trim() });
       aviso('Negocio creado'); cerrar(); await conectarNube().then(ok => aviso(ok ? '¡Ahora tus datos quedan en la nube y se comparten!' : 'No se pudo conectar: revisa tu conexión'));
-    } catch (e) { aviso('No se pudo crear: ' + (e && e.message || e)); if (/Ya perteneces|negocio_actual/i.test(String(e && e.message))) { try { cerrar(); await conectarNube(); } catch (e2) {} } }
+    } catch (e) {
+      if (/Ya perteneces|negocio_actual/i.test(String(e && e.message))) {
+        /* Esta cuenta ya tiene negocio en el servidor: en vez de dar error, se conecta a él */
+        nbSet(NBK_NG, null); cerrar(); aviso('Esta cuenta ya tiene un negocio; conectando…');
+        const ok = await conectarNube(); aviso(ok ? 'Conectado a tu negocio' : 'No se pudo conectar: revisa tu conexión');
+      } else aviso('No se pudo crear: ' + (e && e.message || e));
+    }
   },
   'nube-unirme': async () => {
     const cfg = nbCfg(), ses = nbCta(); if (!cfg || !ses) return aviso('Entra con tu cuenta primero.');
     const codigo = v$('nb-codigo'); if (!codigo) return aviso('Escribe el código que te compartieron.');
     try {
-      nbSet(NBK_S, { ...ses, access: (await sbRefrescar(cfg, ses.refresh)).access });
-      const id = await sbApi(cfg, '/rest/v1/rpc/unirme_con_codigo', { body: JSON.stringify({ p_codigo: codigo.trim() }) }, nbCta().access);
+      const nueva = await sbRenovar(cfg, ses);
+      const id = await sbApi(cfg, '/rest/v1/rpc/unirme_con_codigo', { body: JSON.stringify({ p_codigo: codigo.trim() }) }, nueva.access);
       if (!id) return aviso('Ese código no corresponde a ningún negocio.');
       nbSet(NBK_NG, { id: id });
-      aviso('¡Bienvenido al negocio!'); cerrar(); await conectarNube().then(ok => aviso(ok ? 'Connectado: comparten los mismos datos' : 'No se pudo conectar'));
-    } catch (e) { aviso('No se pudo unir: ' + (e && e.message || e)); }
+      aviso('¡Bienvenido al negocio!'); cerrar(); await conectarNube().then(ok => aviso(ok ? 'Conectado: comparten los mismos datos' : 'No se pudo conectar'));
+    } catch (e) {
+      if (/Ya perteneces/i.test(String(e && e.message))) {
+        nbSet(NBK_NG, null); cerrar(); aviso('Esta cuenta ya pertenece a un negocio; conectando…');
+        const ok = await conectarNube(); aviso(ok ? 'Conectado a tu negocio' : 'No se pudo conectar: revisa tu conexión');
+      } else aviso('No se pudo unir: ' + (e && e.message || e));
+    }
   },
   'nube-salir': () => { nbSet(NBK_S, null); nbSet(NBK_NG, null); aviso('Saliste de la cuenta'); formNube(); },
   'pin-activar': () => formPin('activar'), 'pin-cambiar': () => formPin('cambiar'), 'pin-quitar': () => formPin('quitar'), 'save-pin': el => savePin(el.dataset.modo),
@@ -1963,7 +1994,8 @@ async function arrancar() {
   }
   let db = null;
   try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch (e) { db = null; }
-  if (!db && nbCta()) { try { db = await crearSupabaseDB(nbCfg(), nbCta(), nbNeg()); } catch (e) { db = null; } }
+  /* Con sesión guardada: conecta por el camino que renueva el token y consulta el negocio al servidor (antes usaba un token vencido y caía en modo local) */
+  if (!db && nbCta()) { try { if (await conectarNube()) return; } catch (e) {} }
   if (db) { DB = db; marcaSync(true);
     const listos = new Set(); let pintado = false;
     const mostrar = () => { pintado = true; pintar(); };
