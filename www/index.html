@@ -481,22 +481,39 @@ async function conectarNube() {
 function formNube() {
   const c = nbCfg(), ses = nbCta(), neg = nbNeg();
   const estado = !c ? 'Todavía no hay conexión a la nube.' : !ses ? 'Conexión lista. Falta entrar con tu cuenta.' : !neg ? 'Cuenta lista. Te falta crear tu negocio o unirte con un código.' : 'Conectado a la nube.';
+  const personalizada = c && String(c.url) !== NUBE_DE_FABRICA.url;
+  if (ses) {
+    abrir(`<h2>Guardado en la nube</h2><p class="small muted" style="margin:0 0 10px">Comparte tus datos entre tu teléfono y tu computadora, y con quien tú quieras (ej. tu esposa o socios). Cada negocio queda privado: nadie ve los datos de otro.</p>
+    <p class="small" style="margin:0 0 10px"><b>Estado:</b> ${esc(estado)}</p>
+    <div class="panel" style="margin-bottom:12px"><div class="row" style="border-top:none;padding:12px 0"><span class="pill ok">En línea</span><div class="main"><div class="t">${esc(ses.email || 'Cuenta entrada')}</div><div class="s">${neg ? `Negocio: ${esc(neg.nombre || '')} · Código de invitación: ${esc(neg.codigo || '')}` : 'Sin negocio todavía'}</div></div></div>
+    ${neg ? '' : `<div class="f" style="margin-top:8px">
+      <div class="full"><label for="f-nb-nombre">Nombre del negocio</label><input id="f-nb-nombre" type="text" placeholder="Ej: Boutique Ana"></div>
+      <div class="full"><button class="btn pri" data-act="nube-crear">Crear mi negocio</button></div>
+      <p class="small muted" style="margin:4px 0 2px">— o si alguien ya te invitó —</p>
+      <div class="full"><label for="f-nb-codigo">Código del negocio</label><input id="f-nb-codigo" type="text" placeholder="Ej: 8AF3DE"></div>
+      <div class="full"><button class="btn" data-act="nube-unirme">Unirme con código</button></div>
+    </div>`}
+    ${neg ? `<p class="small muted" style="margin:6px 0 0">Invita a alguien con el código <b>${esc(neg.codigo || '')}</b>: la otra persona se registra con su correo, abre esta misma pantalla, elige <b>Unirme con código</b> y pega el tuyo.</p>` : ''}</div>
+    <div class="foot"><button class="btn" data-act="nube-salir">Salir de la cuenta</button><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
+    return;
+  }
   abrir(`<h2>Guardado en la nube</h2><p class="small muted" style="margin:0 0 10px">Comparte tus datos entre tu teléfono y tu computadora, y con quien tú quieras (ej. tu esposa o socios). Cada negocio queda privado: nadie ve los datos de otro.</p>
-  <p class="small" style="margin:0 0 10px"><b>Estado:</b> ${esc(estado)} ${neg && ses ? `· Negocio <b>${esc(nbNeg().nombre || '')}</b> · Código <b>${esc(nbNeg().codigo)}</b>` : ''}</p>
+  <p class="small" style="margin:0 0 10px"><b>Estado:</b> ${esc(estado)}</p>
   <div class="f">
-    <div class="full"><label for="f-nb-url">URL de tu proyecto Supabase</label><input id="f-nb-url" type="url" placeholder="https://xxxxx.supabase.co" value="${esc(c ? c.url : '')}"></div>
-    <div class="full"><label for="f-nb-key">Clave pública (anon / publishable)</label><input id="f-nb-key" type="text" placeholder="sb_publishable_… o eyJ…" value="${esc(c ? c.key : '')}"></div>
-    <div class="full"><button class="btn sm" data-act="nube-config">Guardar conexión</button></div>
-    ${c ? `<div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" value="${esc(ses && ses.email ? ses.email : '')}"></div>
-    <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password"></div>
-    <div class="full"><button class="btn pri" data-act="nube-entrar">Entrar / Crear cuenta</button> <button class="btn" data-act="nube-salir" style="${ses ? '' : 'display:none'}">Salir de la cuenta</button></div>
-    ${ses ? `<div class="full" style="border-top:1px solid var(--line);padding-top:10px"><h3 style="font-size:15px;margin:0 0 4px">Tu negocio</h3><p class="small muted" style="margin:0 0 6px">Crea el tuyo o pega el código de otro negocio para trabajar en sus mismos datos.</p>
-      <input id="f-nb-nombre" type="text" placeholder="Nombre del negocio (para crearlo)" style="margin-bottom:6px">
-      <button class="btn pri" data-act="nube-crear">Crear negocio</button>
-      <p class="small muted" style="margin:8px 0 2px">— o si alguien ya te invitó —</p>
-      <input id="f-nb-codigo" type="text" placeholder="Código del negocio (ej: 8AF3DE)">
-      <button class="btn" data-act="nube-unirme" style="margin-top:6px">Unirme con código</button></div>` : ''}` : ''}
-  </div><div class="foot"><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
+    <div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>
+    <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres"></div>
+    <div class="full"><button class="btn pri" data-act="nube-entrar">Entrar / Crear cuenta</button></div>
+    <p class="small muted" style="margin:2px 0 8px">Si es tu primera vez, esta misma casilla crea tu cuenta automáticamente.</p>
+  </div>
+  <details style="margin:6px 0 4px"><summary class="small muted" style="cursor:pointer">⚙️ Opción avanzada: cambiar de servidor</summary>
+    <div class="f" style="margin-top:8px">
+      <div class="full"><label for="f-nb-url">URL de tu proyecto Supabase</label><input id="f-nb-url" type="url" placeholder="${esc(NUBE_DE_FABRICA.url)}" value="${personalizada ? esc(c.url) : ''}"></div>
+      <div class="full"><label for="f-nb-key">Clave pública (anon / publishable)</label><input id="f-nb-key" type="text" placeholder="sb_publishable_… o eyJ…" value="${personalizada ? esc(c.key) : ''}"></div>
+      <div class="full"><button class="btn sm" data-act="nube-config">Guardar conexión</button></div>
+      ${personalizada ? `<div class="full"><button class="btn sm" data-act="nube-fabrica">Volver al servidor de la app</button></div>` : ''}
+    </div>
+  </details>
+  <div class="foot"><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
 }
 
 /* ----- respaldos: recordatorio, contador de cambios y copias automáticas del teléfono ----- */
@@ -1838,6 +1855,7 @@ const ACT = {
     nbSet(NBK, { url: url.trim(), key: key.trim() });
     aviso('Conexión a la nube guardada'); formNube();
   },
+  'nube-fabrica': () => { nbSet(NBK, null); aviso('Servidor de la app restaurado'); formNube(); },
   'nube-entrar': async () => {
     const cfg = nbCfg(); if (!cfg) return aviso('Primero guarda la conexión (URL y clave).');
     const email = v$('nb-email'), pass = v$('nb-pass');
