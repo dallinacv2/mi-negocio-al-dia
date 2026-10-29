@@ -2058,5 +2058,14 @@ if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('htt
 window.addEventListener('online', async () => { if (!window.claude && DB && DB.local && nbCfg() && nbCta()) { const ok = await conectarNube(); if (ok) aviso('De vuelta en la nube'); } });
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
 </script>
-
+<script src="./app-updater.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').then(() => {
+      console.log('Service Worker registrado');
+    }).catch(err => {
+      console.warn('No se pudo registrar el SW:', err);
+    });
+  }
+</script>
 </body></html>
