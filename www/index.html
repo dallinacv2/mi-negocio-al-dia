@@ -2024,36 +2024,66 @@ iniciarBloqueo();
 if (ES_APP) document.addEventListener('click', e => { const a = e.target.closest && e.target.closest('a[target="_blank"]'); if (a && a.href) { e.preventDefault(); location.href = a.href; } }, true);
 arrancar();
 /* Sin internet: guarda la app en el equipo y pide que el navegador no borre los datos */
-/* Banner de actualización: si hay versión nueva guardada, aviso con botón "Actualizar" */
+/* Actualizaciones. Web: el navegador baja la versión nueva en segundo plano y avisa con botón "Actualizar".
+   App del teléfono (APK): pregunta a GitHub si hay un APK más nuevo y ofrece descargarlo.
+   APP_BUILD lo escribe GitHub al publicar; en desarrollo queda sin valor y no avisa nada. */
+const APP_BUILD = '__BUILD__';
+const REPO_GH = 'dallinacv2/mi-negocio-al-dia';
+function avisoVersion(texto, boton, alPulsar) {
+  if (document.getElementById('aviso-actualizar')) return;
+  const b = document.createElement('div');
+  b.id = 'aviso-actualizar'; b.className = 'nueva-ver';
+  b.innerHTML = '<span>' + texto + '</span><button class="btn" data-cc="luego">Luego</button><button class="btn pri" data-cc="actualizar">' + boton + '</button>';
+  b.addEventListener('click', e => {
+    if (e.target.closest('[data-cc="luego"]')) { b.remove(); return; }
+    if (e.target.closest('[data-cc="actualizar"]')) alPulsar();
+  });
+  document.body.appendChild(b);
+}
 if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').then(reg => {
-    const mostrarBanner = () => {
-      if (document.getElementById('aviso-actualizar')) return;
-      const b = document.createElement('div');
-      b.id = 'aviso-actualizar'; b.className = 'nueva-ver';
-      b.innerHTML = '<span>📦 Hay una versión nueva de la app</span><button class="btn pri" data-cc="actualizar">Actualizar</button>';
-      b.addEventListener('click', e => {
-        if (!e.target.closest('[data-cc="actualizar"]')) return;
-        try { postMessage('skip');
-          if (reg.waiting && reg.waiting.postMessage) reg.waiting.postMessage('skip');
-          if (reg.active && reg.active.postMessage) reg.active.postMessage('skip');
-        } catch (err) {}
-        // Si tarda más de 3 s en activar, recarga igual
-        setTimeout(() => location.reload(), 3000);
-      });
-      document.body.appendChild(b);
-    };
-    if (reg.waiting) mostrarBanner();
+    const mostrarBanner = () => avisoVersion('📦 Hay una versión nueva de la app', 'Actualizar', () => {
+      try {
+        if (reg.waiting && reg.waiting.postMessage) reg.waiting.postMessage('skip');
+        if (reg.active && reg.active.postMessage) reg.active.postMessage('skip');
+      } catch (err) {}
+      // Si tarda más de 3 s en activar, recarga igual
+      setTimeout(() => location.reload(), 3000);
+    });
+    if (reg.waiting && navigator.serviceWorker.controller) mostrarBanner();
     reg.addEventListener('updatefound', () => {
       const sw = reg.installing;
       if (!sw) return;
       sw.addEventListener('statechange', () => { if (sw.state === 'installed' && navigator.serviceWorker.controller) mostrarBanner(); });
     });
+    // Quien deja la app abierta también se entera: busca versión nueva cada 30 min y al volver a la pantalla
+    const buscar = () => { try { reg.update(); } catch (err) {} };
+    setInterval(buscar, 30 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') buscar(); });
   }).catch(() => {});
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (window.__recargando) return; window.__recargando = true; location.reload();
   });
-} else if ('serviceWorker' in navigator) { try {} catch (e) {} }
+}
+if (ES_APP && /^\d+$/.test(APP_BUILD)) {
+  let ultimoAviso = 0;
+  const buscarApk = async () => {
+    if (Date.now() - ultimoAviso < 6 * 3600 * 1000 || document.getElementById('aviso-actualizar')) return;
+    try {
+      const r = await fetch('https://api.github.com/repos/' + REPO_GH + '/releases/latest', {headers: {Accept: 'application/vnd.github+json'}});
+      if (!r.ok) return;
+      const j = await r.json();
+      const num = parseInt(String(j.tag_name || '').replace(/\D/g, ''), 10);
+      const apk = (j.assets || []).find(a => /\.apk$/i.test(a.name));
+      if (!num || !apk || num <= parseInt(APP_BUILD, 10)) return;
+      ultimoAviso = Date.now();
+      avisoVersion('📦 Hay una versión nueva de la app', 'Descargar', () => { location.href = apk.browser_download_url; });
+    } catch (err) {}
+  };
+  setTimeout(buscarApk, 4000);
+  window.addEventListener('online', buscarApk);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') buscarApk(); });
+}
 /* Al volver la red, si la nube está configurada y sigo en modo local, me reconecto */
 window.addEventListener('online', async () => { if (!window.claude && DB && DB.local && nbCfg() && nbCta()) { const ok = await conectarNube(); if (ok) aviso('De vuelta en la nube'); } });
 try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}

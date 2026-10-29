@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths:
+      - 'www/**'
+      - '.github/workflows/pages.yml'
 
 permissions:
   contents: read
@@ -23,6 +26,14 @@ jobs:
     steps:
       - name: Tomar el código
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calcular número de versión
+        run: echo "BUILD=$(( $(git rev-list --count HEAD) + 1000 ))" >> "$GITHUB_ENV"
+
+      - name: Escribir la versión en la app
+        run: sed -i "s/__BUILD__/$BUILD/g" www/sw.js www/index.html
 
       - name: Subir la carpeta www
         uses: actions/upload-pages-artifact@v3

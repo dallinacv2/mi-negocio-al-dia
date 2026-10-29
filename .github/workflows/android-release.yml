@@ -4,6 +4,17 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths:
+      - 'www/**'
+      - 'android/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'capacitor.config.json'
+      - '.github/workflows/android-release.yml'
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -15,6 +26,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calcular número de versión
+        run: echo "BUILD=$(( $(git rev-list --count HEAD) + 1000 ))" >> "$GITHUB_ENV"
+
+      - name: Escribir la versión en la app
+        run: sed -i "s/__BUILD__/$BUILD/g" www/sw.js www/index.html
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -34,16 +53,21 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
       - name: Build APK
         working-directory: android
         shell: bash
-        run: ./gradlew assembleDebug --console=plain
+        run: |
+          chmod +x gradlew
+          APP_BUILD=$BUILD ./gradlew assembleDebug --console=plain
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: android-${{ github.run_number }}
-          name: Android APK ${{ github.run_number }}
+          tag_name: android-${{ env.BUILD }}
+          name: Mi Negocio Al Día ${{ env.BUILD }}
           draft: false
           prerelease: false
           generate_release_notes: true

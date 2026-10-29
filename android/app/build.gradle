@@ -1,6 +1,8 @@
 apply plugin: 'com.android.application'
 
 def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1") as int
+// APP_BUILD lo calcula GitHub (cantidad de cambios + 1000): es el mismo número que usa la web y el aviso de actualización
+def appBuild = System.getenv("APP_BUILD")
 
 android {
     namespace = "com.minegocioaldia.app"
@@ -10,8 +12,8 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // El número de versión sube solo en cada compilación de GitHub, así Android permite actualizar encima
-        versionCode runNumber + 100
-        versionName "1.0.${runNumber}"
+        versionCode appBuild ? (appBuild as int) : runNumber + 100
+        versionName appBuild ? "1.0.${appBuild}" : "1.0.${runNumber}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
