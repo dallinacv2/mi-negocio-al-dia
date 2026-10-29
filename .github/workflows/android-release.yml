@@ -1,1 +1,51 @@
+name: Android release
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Sync web assets into Android project
+        run: npx cap sync android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build APK
+        working-directory: android
+        shell: bash
+        run: ./gradlew assembleDebug --console=plain
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-${{ github.run_number }}
+          name: Android APK ${{ github.run_number }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            android/app/build/outputs/apk/debug/app-debug.apk
