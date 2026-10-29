@@ -381,6 +381,7 @@ const WEB_URL = 'https://dallinacv2.github.io/mi-negocio-al-dia/';   /* a donde 
 const REDIR_RECUP = ES_APP ? WEB_URL : (location.origin + location.pathname);   /* el correo de recuperación te devuelve a la misma web que estés usando */
 const SIN_NUBE = 'mnad-sin-nube';            /* la persona eligió "Usar sin conectar": no se le vuelve a preguntar al abrir */
 let NUBE_LISTA = Promise.resolve(false);      /* se cumple cuando la nube terminó de bajar los datos */
+let ES_DUENA = false;                          /* true cuando la cuenta que entró es la que creó este negocio */
 const nbCfg = () => { try { const j = JSON.parse(localStorage.getItem(NBK) || 'null'); return (j && j.url && j.key) ? j : NUBE_DE_FABRICA; } catch (e) { return NUBE_DE_FABRICA; } };
 const nbCta = () => { try { return JSON.parse(localStorage.getItem(NBK_S) || 'null'); } catch (e) { return null; } };
 const nbNeg = () => { try { return JSON.parse(localStorage.getItem(NBK_NG) || 'null'); } catch (e) { return null; } };
@@ -415,8 +416,10 @@ async function crearSupabaseDB(cfg, sesion, neg) {
   const conocer = {};                            /* id de registro -> updated_at remoto conocido */
   const oyentes = {};                            /* tipo -> [callback] */
   let vivo = true;
-  const negocioFila = await sbApi(cfg, '/rest/v1/negocio?id=eq.' + negId + '&select=codigo,nombre', {}, token).then(a => (a && a[0]) || null);
+  const negocioFila = await sbApi(cfg, '/rest/v1/negocio?id=eq.' + negId + '&select=codigo,nombre,creado_por', {}, token).then(a => (a && a[0]) || null);
   if (!negocioFila) { nbSet(NBK_NG, null); throw new Error('Ya no tienes acceso a ese negocio.'); }
+  /* La dueña del negocio es la cuenta que lo creó (negocio.creado_por) */
+  ES_DUENA = !!(sesion && sesion.uid && negocioFila.creado_por && negocioFila.creado_por === sesion.uid);
   nbSet(NBK_NG, { id: negId, nombre: negocioFila.nombre || neg.nombre || '', codigo: negocioFila.codigo });
   const snapDe = col => ({ docs: (S[col] || []).map(o => ({ id: o.id, data: () => o })) });
   const emitir = col => (oyentes[col] || []).forEach(cb => { try { cb(snapDe(col)); } catch (e) {} });
@@ -597,8 +600,10 @@ function formNube() {
       <div class="full"><label for="f-nb-codigo">Código del negocio</label><input id="f-nb-codigo" type="text" placeholder="Ej: 8AF3DE"></div>
       <div class="full"><button class="btn" data-act="nube-unirme">Unirme con código</button></div>
     </div>`}
-    ${neg ? `<p class="small muted" style="margin:6px 0 0">Invita a alguien con el código <b>${esc(neg.codigo || '')}</b>: la otra persona se registra con su correo, abre esta misma pantalla, elige <b>Unirme con código</b> y pega el tuyo.</p>` : ''}</div>
+    ${neg ? `<p class="small muted" style="margin:6px 0 0">Invita a alguien con el código <b>${esc(neg.codigo || '')}</b>: la otra persona se registra con su correo, abre esta misma pantalla, elige <b>Unirme con código</b> y pega el tuyo.</p>` : ''}
+    ${neg ? `<div id="integ" style="margin-top:10px"></div>` : ''}</div>
     <div class="foot"><button class="btn" data-act="nube-salir">Salir de la cuenta</button><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
+    if (neg) cargarIntegrantes();
     return;
   }
   abrir(`<h2>Guardado en la nube</h2><p class="small muted" style="margin:0 0 10px">Comparte tus datos entre tu teléfono y tu computadora, y con quien tú quieras (ej. tu esposa o socios). Cada negocio queda privado: nadie ve los datos de otro.</p>
@@ -619,6 +624,29 @@ function formNube() {
     </div>
   </details>
   <div class="foot"><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
+}
+
+/* ----- panel de integrantes (solo la dueña): lista de cuentas en el negocio, y puede quitar a alguien ----- */
+async function cargarIntegrantes() {
+  const box = document.getElementById('integ'); if (!box || !ES_DUENA) return;
+  const cfg = nbCfg(), ses = nbCta(), neg = nbNeg();
+  if (!cfg || !ses || !neg || !neg.id) return;
+  box.innerHTML = '<p class="small muted" style="margin:8px 0 0">Buscando integrantes…</p>';
+  let filas = null;
+  try {
+    filas = await sbApi(cfg, '/rest/v1/rpc/integrantes_negocio', { method: 'POST', body: JSON.stringify({ p_negocio: neg.id }) }, ses.access);
+  } catch (e) {
+    /* Sin la función SQL instalada: lista básica (sin correos) desde la tabla miembro */
+    try {
+      const xs = (await sbApi(cfg, '/rest/v1/miembro?negocio_id=eq.' + neg.id + '&select=user_id,rol', {}, ses.access)) || [];
+      filas = xs.map(m => ({ user_id: m.user_id, rol: m.rol }));
+    } catch (e2) { box.innerHTML = '<p class="small muted" style="margin:8px 0 0">No se pudo cargar la lista: ' + esc(String(e2 && e2.message || e2)) + '</p>'; return; }
+  }
+  const fil = (filas || []).filter(x => x && x.user_id).map(x => ({ uid: x.user_id, correo: x.correo || x.email || '', rol: x.rol || '', duena: !!x.es_duena || x.user_id === ses.uid }));
+  if (!fil.length) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div class="panel"><div class="t" style="font-weight:700;margin-bottom:4px">Integrantes</div>' + fil.map((m, i) =>
+    `<div class="row" style="padding:8px 0${i ? ';border-top:1px solid var(--line)' : ''}"><div class="main"><div class="t">${esc(m.correo || 'cuenta ' + String(m.uid).slice(0, 8))}${m.duena ? ' <span class="pill ok">dueña</span>' : ''}</div><div class="s">${esc(m.rol || 'miembro')}</div></div>${ES_DUENA && !m.duena ? '<button class="btn sm" data-act="integ-quitar" data-u="' + esc(m.uid) + '">Quitar</button>' : ''}</div>`).join('') +
+    (fil.length === 1 ? '<p class="small muted" style="margin:4px 0 0">Solo estás tú. Otras personas entran con el código de invitación.</p>' : '') + '</div>';
 }
 
 /* ----- respaldos: recordatorio, contador de cambios y copias automáticas del teléfono ----- */
@@ -2048,7 +2076,18 @@ const ACT = {
     } catch (e) { aviso('No se pudo cambiar: ' + (e && e.message || e)); }
   },
   'bienv-local': () => { try { localStorage.setItem(SIN_NUBE, '1'); } catch (e) {} cerrarBienvenida(); },
-  'nube-salir': () => { nbSet(NBK_S, null); nbSet(NBK_NG, null); aviso('Saliste de la cuenta'); formNube(); },
+  'integ-quitar': el => {
+    const u = el.dataset.u; if (!u) return;
+    const nombre = (el.closest('.row') && el.closest('.row').querySelector('.t') || {}).textContent || '';
+    confirmar('Quitar del negocio', `¿Sacar a ${nombre.trim()}? Esa persona dejará de ver los datos de tu negocio en su app (sus cambios ya guardados se quedan).`, 'Quitar', async () => {
+      const cfg = nbCfg(), ses = nbCta(), neg = nbNeg(); aviso('Quitando…');
+      try {
+        await sbApi(cfg, '/rest/v1/rpc/expulsar_miembro', { method: 'POST', body: JSON.stringify({ p_negocio: neg.id, p_user: u }) }, ses.access);
+        aviso('Esa persona ya no está en tu negocio'); cargarIntegrantes();
+      } catch (e) { aviso('No se pudo quitar: ' + (e && e.message || e)); }
+    });
+  },
+  'nube-salir': () => { nbSet(NBK_S, null); nbSet(NBK_NG, null); ES_DUENA = false; aviso('Saliste de la cuenta'); formNube(); },
   'pin-activar': () => formPin('activar'), 'pin-cambiar': () => formPin('cambiar'), 'pin-quitar': () => formPin('quitar'), 'save-pin': el => savePin(el.dataset.modo),
   respaldo: () => formRespaldo(), 'respaldo-luego': () => { metaSet({pospuesto: hoy()}); pintar(); }, 'copia-restaurar': el => restaurarCopia(+el.dataset.i),
   'bk-xlsx': () => descargar(construirXlsx(), `respaldo-${hoy()}.xlsx`),
