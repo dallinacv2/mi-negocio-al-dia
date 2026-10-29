@@ -5,6 +5,8 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'index.html'
+      - 'sw.js'
       - 'www/**'
       - 'android/**'
       - 'package.json'
@@ -33,7 +35,10 @@ jobs:
         run: echo "BUILD=$(( $(git rev-list --count HEAD) + 1000 ))" >> "$GITHUB_ENV"
 
       - name: Escribir la versión en la app
-        run: sed -i "s/__BUILD__/$BUILD/g" www/sw.js www/index.html
+        run: sed -i "s/__BUILD__/$BUILD/g" index.html sw.js
+
+      - name: Copiar la web a www (fuente única: la raíz)
+        run: cp index.html www/index.html && cp sw.js www/sw.js
 
       - name: Setup Node
         uses: actions/setup-node@v4

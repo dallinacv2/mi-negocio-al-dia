@@ -377,7 +377,8 @@ const NBK = 'mnad-nube', NBK_S = 'mnad-nube-sesion', NBK_NG = 'mnad-nube-negocio
 const NUBE_DE_FABRICA = { url: 'https://zjszzzpentkzijphyskm.supabase.co', key: 'sb_publishable_Q9GNwYdkPbauZOeU9wUa0A_6Shbr5Er' };
 const DIAS_SIN_SESION_PARA_BLOQUEAR = 30;
 const NUBE_FECHA_ULTIMA = 'mnad-sesion-ultimo';
-const WEB_URL = 'https://dallinacv2.github.io/mi-negocio-al-dia/';   /* a donde llevan los enlaces de los correos de Supabase */
+const WEB_URL = 'https://dallinacv2.github.io/mi-negocio-al-dia/';   /* a donde llevan los enlaces de los correos de Supabase cuando no hay web propia */
+const REDIR_RECUP = ES_APP ? WEB_URL : (location.origin + location.pathname);   /* el correo de recuperación te devuelve a la misma web que estés usando */
 const SIN_NUBE = 'mnad-sin-nube';            /* la persona eligió "Usar sin conectar": no se le vuelve a preguntar al abrir */
 let NUBE_LISTA = Promise.resolve(false);      /* se cumple cuando la nube terminó de bajar los datos */
 const nbCfg = () => { try { const j = JSON.parse(localStorage.getItem(NBK) || 'null'); return (j && j.url && j.key) ? j : NUBE_DE_FABRICA; } catch (e) { return NUBE_DE_FABRICA; } };
@@ -2026,7 +2027,7 @@ const ACT = {
     const email = v$('nb-email'); if (!email) return aviso('Escribe tu correo arriba y toca otra vez "Olvidé mi contraseña".');
     const cfg = nbCfg(); aviso('Enviando…');
     try {
-      await sbApi(cfg, '/auth/v1/recover?redirect_to=' + encodeURIComponent(WEB_URL), { body: JSON.stringify({ email }) });
+      await sbApi(cfg, '/auth/v1/recover?redirect_to=' + encodeURIComponent(REDIR_RECUP), { body: JSON.stringify({ email }) });
       aviso('Si ese correo tiene cuenta, te enviamos un enlace. Ábrelo en este mismo teléfono y revisa también Spam.');
     } catch (e) { aviso('No se pudo enviar: ' + (e && e.message || e)); }
   },
