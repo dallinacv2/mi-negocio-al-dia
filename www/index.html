@@ -2239,6 +2239,11 @@ arrancar();
    APP_BUILD lo escribe GitHub al publicar; en desarrollo queda sin valor y no avisa nada. */
 const APP_BUILD = '__BUILD__';
 const REPO_GH = 'dallinacv2/mi-negocio-al-dia';
+/* Versión mínima utilizable. Se queda dormida: mientras la app instalada sea mayor o igual, nadie nota nada.
+   Para obligar a actualizar: sube este número a la versión publicada que quieras exigir (ej. '1070').
+   Regla de seguridad: sin internet la app sigue funcionando normal — el aviso fuerte solo sale si puede descargar. */
+const BUILD_MINIMO = '1050';
+const NECESITA_ACT = /^\d+$/.test(APP_BUILD) && /^\d+$/.test(BUILD_MINIMO) && parseInt(APP_BUILD, 10) < parseInt(BUILD_MINIMO, 10);
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
   {f: '30 de octubre 2026', t: ['Nueva pestaña 📝 Notas: anota encargos pendientes, ideas de mercancía o lo que no quieras olvidar; márcalas hechas o descártalas', 'Informe en pantalla de lo que trae cada actualización; ahora se queda hasta que lo leas, aunque la app se recargue']},
@@ -2271,11 +2276,11 @@ try {
     setTimeout(() => { try { if (document.querySelector('.veil#novedadesBox')) return; mostrarNovedades(); } catch (e) {} }, 900);
   }
 } catch (e) {}
-function avisoVersion(texto, boton, alPulsar) {
+function avisoVersion(texto, boton, alPulsar, sinLuego) {
   if (document.getElementById('aviso-actualizar')) return;
   const b = document.createElement('div');
   b.id = 'aviso-actualizar'; b.className = 'nueva-ver';
-  b.innerHTML = '<span>' + texto + '</span><button class="btn" data-cc="luego">Luego</button><button class="btn pri" data-cc="actualizar">' + boton + '</button>';
+  b.innerHTML = '<span>' + texto + '</span>' + (sinLuego ? '' : '<button class="btn" data-cc="luego">Luego</button>') + '<button class="btn pri" data-cc="actualizar">' + boton + '</button>';
   b.addEventListener('click', e => {
     if (e.target.closest('[data-cc="luego"]')) { b.remove(); return; }
     if (e.target.closest('[data-cc="actualizar"]')) alPulsar();
@@ -2284,7 +2289,7 @@ function avisoVersion(texto, boton, alPulsar) {
 }
 if (!ES_APP && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').then(reg => {
-    const mostrarBanner = () => avisoVersion('📦 Hay una versión nueva de la app', 'Actualizar', () => {
+    const mostrarBanner = () => avisoVersion(NECESITA_ACT ? '⚠️ Esta versión ya no cuenta. Actualiza ahora para seguir al día' : '📦 Hay una versión nueva de la app', 'Actualizar', () => {
       try {
         if (reg.waiting && reg.waiting.postMessage) reg.waiting.postMessage('skip');
         if (reg.active && reg.active.postMessage) reg.active.postMessage('skip');
@@ -2319,7 +2324,7 @@ if (ES_APP && /^\d+$/.test(APP_BUILD)) {
       const apk = (j.assets || []).find(a => /\.apk$/i.test(a.name));
       if (!num || !apk || num <= parseInt(APP_BUILD, 10)) return;
       ultimoAviso = Date.now();
-      avisoVersion('📦 Hay una versión nueva de la app', 'Descargar', () => { location.href = apk.browser_download_url; });
+      avisoVersion(NECESITA_ACT ? '⚠️ Esta versión ya no cuenta. Descarga la nueva ahora mismo' : '📦 Hay una versión nueva de la app', 'Descargar', () => { location.href = apk.browser_download_url; }, NECESITA_ACT);
     } catch (err) {}
   };
   setTimeout(buscarApk, 4000);
