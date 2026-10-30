@@ -2246,8 +2246,9 @@ const BUILD_MINIMO = '1050';
 const NECESITA_ACT = /^\d+$/.test(APP_BUILD) && /^\d+$/.test(BUILD_MINIMO) && parseInt(APP_BUILD, 10) < parseInt(BUILD_MINIMO, 10);
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
-  {f: '30 de octubre 2026', t: ['Nueva pestaña 📝 Notas: anota encargos pendientes, ideas de mercancía o lo que no quieras olvidar; márcalas hechas o descártalas', 'Informe en pantalla de lo que trae cada actualización; ahora se queda hasta que lo leas, aunque la app se recargue']},
-  {f: '30 de octubre 2026', t: ['Las invitaciones ya abren la pantalla de contraseña nueva', 'Registro cerrado: las cuentas nuevas solo por invitación del dueño', 'Panel de integrantes con correos y poder de sacar a alguien del negocio']},
+  {f: '30 de octubre — tarde', t: ['Gráfico de Ventas del mes: los números de los días volvieron a su columna (se estaban amontonando)', 'El informe de novedades ya no desaparece si la app se recarga antes de que lo leas', 'Actualización forzada disponible y dormida: solo actúa si algún día lo pides']},
+  {f: '30 de octubre — mediodía', t: ['Nueva pestaña 📝 Notas: encargos pendientes, ideas de mercancía o recordatorios; márcalas hechas o descártalas', 'Informe en pantalla de lo que trae cada actualización', 'El APK de releases ahora se llama MiNegocioAlDia-versión.apk']},
+  {f: '30 de octubre — mañana', t: ['Las invitaciones ya abren la pantalla de contraseña nueva', 'Registro cerrado: cuentas nuevas solo por invitación del dueño', 'Panel de integrantes con correos y poder de sacar a alguien del negocio']},
   {f: '29 de octubre 2026', t: ['Recuperación de contraseña por correo', 'Pantalla de bienvenida: entrar a la nube o usar sin conectar', 'Aviso de versión nueva para la web y el APK']}
 ];
 function mostrarNovedades() {
