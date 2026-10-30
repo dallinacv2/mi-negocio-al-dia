@@ -68,6 +68,9 @@ jobs:
           chmod +x gradlew
           APP_BUILD=$BUILD ./gradlew assembleDebug --console=plain
 
+      - name: Nombrar el APK con la versión
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "MiNegocioAlDia-${BUILD}.apk"
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -77,4 +80,4 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            android/app/build/outputs/apk/debug/app-debug.apk
+            MiNegocioAlDia-${{ env.BUILD }}.apk
