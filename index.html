@@ -533,22 +533,41 @@ function mostrarBienvenida() {
   d.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target && e.target.id === 'f-nb-pass') { const b = d.querySelector('[data-act="nube-entrar"]'); if (b) b.click(); } });
   document.body.appendChild(d);
 }
-/* ----- recuperar contraseña: el correo trae un enlace de vuelta a la web con la llave en la dirección (#access_token=…&type=recovery) ----- */
+/* ----- correos de Supabase (recuperar contraseña e invitaciones): el enlace trae la llave en la dirección ----- */
+/* Formatos que puede traer el enlace:
+   #access_token=…&type=recovery  ·  #access_token=…&type=signup  ·  #invite_token=…  (flujo implícito)
+   ?token_hash=…&type=invite      ·  ?token_hash=…&type=signup       (flujo PKCE) */
 let RECUP = null;
-function enlaceDeRecuperacion() {
+function enlaceDeCorreo() {
   let h; try { h = new URLSearchParams(location.hash.replace(/^#/, '')); } catch (e) { return false; }
+  let q; try { q = new URLSearchParams(location.search); } catch (e2) { q = new URLSearchParams(); }
   const limpiar = () => { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} };
-  if (h.get('error') || h.get('error_code')) {
+  if (h.get('error') || h.get('error_code') || q.get('error') || q.get('error_code')) {
     limpiar();
-    setTimeout(() => aviso('Ese enlace venció o ya se usó. Toca "Olvidé mi contraseña" para pedir otro.'), 600);
+    setTimeout(() => aviso('Ese enlace venció o ya se usó. Pide otro a la dueña del negocio.'), 600);
     return false;
   }
-  if (h.get('type') === 'recovery' && h.get('access_token')) {
-    RECUP = { access: h.get('access_token'), refresh: h.get('refresh_token') || '' };
+  /* Llave directa (recovery y signup por el flujo implícito o invitación) */
+  const tipo = (h.get('type') || q.get('type') || '').toLowerCase();
+  const llave = h.get('access_token') || h.get('invite_token');
+  if (llave && ['recovery', 'signup', 'invite', ''].includes(tipo)) {
+    RECUP = { access: llave, refresh: h.get('refresh_token') || '' };
     limpiar(); mostrarNuevaClave(); return true;
+  }
+  /* token_hash (flujo PKCE): hay que verificarlo contra el servidor para recibir la sesión */
+  const hashDado = q.get('token_hash');
+  if (hashDado && ['invite', 'signup', 'recovery'].includes(tipo)) {
+    limpiar();
+    const cfg = nbCfg();
+    sbApi(cfg, '/auth/v1/verify?token=' + encodeURIComponent(hashDado) + '&type=' + tipo, { method: 'POST', body: '{}' })
+      .then(s => { if (s && s.access_token) { RECUP = { access: s.access_token, refresh: s.refresh_token || '' }; mostrarNuevaClave(); } else { aviso('Ese enlace no sirve. Pide otro a la dueña del negocio.'); } })
+      .catch(() => aviso('Ese enlace venció o ya se usó. Pide otro a la dueña del negocio.'));
+    return true;
   }
   return false;
 }
+/* Nombre antiguo conservado por si algo lo llamaba */
+const enlaceDeRecuperacion = enlaceDeCorreo;
 function mostrarNuevaClave() {
   cerrarBienvenida();
   const d = document.createElement('div'); d.id = 'bienv';
