@@ -2241,12 +2241,14 @@ const APP_BUILD = '__BUILD__';
 const REPO_GH = 'dallinacv2/mi-negocio-al-dia';
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
-  {f: '30 de octubre 2026', t: ['Nueva pestaña 📝 Notas: anota encargos pendientes, ideas de mercancía o lo que no quieras olvidar; márcalas hechas o descártalas', 'Informe en pantalla de lo que trae cada actualización']},
+  {f: '30 de octubre 2026', t: ['Nueva pestaña 📝 Notas: anota encargos pendientes, ideas de mercancía o lo que no quieras olvidar; márcalas hechas o descártalas', 'Informe en pantalla de lo que trae cada actualización; ahora se queda hasta que lo leas, aunque la app se recargue']},
   {f: '30 de octubre 2026', t: ['Las invitaciones ya abren la pantalla de contraseña nueva', 'Registro cerrado: las cuentas nuevas solo por invitación del dueño', 'Panel de integrantes con correos y poder de sacar a alguien del negocio']},
   {f: '29 de octubre 2026', t: ['Recuperación de contraseña por correo', 'Pantalla de bienvenida: entrar a la nube o usar sin conectar', 'Aviso de versión nueva para la web y el APK']}
 ];
 function mostrarNovedades() {
-  const d = document.createElement('div'); d.className = 'veil'; d.style.zIndex = 140;
+  if (document.querySelector('.veil#novedadesBox')) return;
+  window.__novAbierto = true;
+  const d = document.createElement('div'); d.id = 'novedadesBox'; d.className = 'veil'; d.style.zIndex = 140;
   d.innerHTML = `<div class="sheet" role="dialog" aria-label="Novedades"><h2>📋 Novedades de esta versión</h2>
     <p class="small muted" style="margin:0 0 10px">Lo que trajo esta actualización:</p>
     <div class="panel" style="margin-bottom:12px">${NOVEDADES[0].t.map(x => `<div style="padding:7px 0;border-top:1px solid var(--line)">• ${esc(x)}</div>`).join('')}</div>
@@ -2254,11 +2256,21 @@ function mostrarNovedades() {
       ${NOVEDADES.slice(1).map(g => `<div class="small" style="margin-top:10px"><b>${esc(g.f)}</b><ul style="margin:2px 0 0 18px;padding:0;color:var(--muted)">${g.t.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`).join('')}
     </details>
     <div class="foot"><button class="btn pri" data-nv="listo">Listo</button></div></div>`;
-  d.addEventListener('click', e => { if (e.target === d || e.target.closest('[data-nv="listo"]')) d.remove(); });
+  d.addEventListener('click', e => {
+    if (e.target === d || e.target.closest('[data-nv="listo"]')) {
+      try { localStorage.setItem('mnad-novedades-visto', String(APP_BUILD)); } catch (e2) {}
+      d.remove(); window.__novAbierto = false;
+    }
+  });
   document.body.appendChild(d);
 }
-/* Se muestra una sola vez por cada versión nueva (al abrir la app ya actualizada) */
-try { const visto = localStorage.getItem('mnad-novedades-visto'); if (/^\d+$/.test(APP_BUILD) && String(visto) !== APP_BUILD) { try { localStorage.setItem('mnad-novedades-visto', APP_BUILD); } catch (e2) {} mostrarNovedades(); } } catch (e) {}
+/* Se muestra una sola vez por cada versión nueva; si una recarga lo interrumpe, vuelve a salir (se marca leído al cerrarlo, no al abrirlo) */
+try {
+  if (/^\d+$/.test(APP_BUILD) && String(localStorage.getItem('mnad-novedades-visto')) !== APP_BUILD && !window.__novAbierto) {
+    window.__novAbierto = true;
+    setTimeout(() => { try { if (document.querySelector('.veil#novedadesBox')) return; mostrarNovedades(); } catch (e) {} }, 900);
+  }
+} catch (e) {}
 function avisoVersion(texto, boton, alPulsar) {
   if (document.getElementById('aviso-actualizar')) return;
   const b = document.createElement('div');
