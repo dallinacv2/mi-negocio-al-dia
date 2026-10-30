@@ -1,14 +1,14 @@
--- ============================================================
---  Mi Negocio Al Día — superpoderes de la dueña
---  Pegar TODO este bloque en Supabase → SQL Editor → RUN (una vez)
+﻿-- ============================================================
+--  Mi Negocio Al DÃ­a â€” superpoderes de la dueÃ±a
+--  Pegar TODO este bloque en Supabase â†’ SQL Editor â†’ RUN (una vez)
 --
---  ¿Qué agrega?
---   · integrantes_negocio(): lista de integrantes con su correo
---     (solo puede llamarla quien ya esté en ese negocio)
---   · expulsar_miembro(): saca a alguien del negocio
---     (solo la dueña: la cuenta que creó el negocio)
+--  Â¿QuÃ© agrega?
+--   Â· integrantes_negocio(): lista de integrantes con su correo
+--     (solo puede llamarla quien ya estÃ© en ese negocio)
+--   Â· expulsar_miembro(): saca a alguien del negocio
+--     (solo la dueÃ±a: la cuenta que creÃ³ el negocio)
 --
---  No toca ningún dato existente: es solo herramientas nuevas.
+--  No toca ningÃºn dato existente: es solo herramientas nuevas.
 -- ============================================================
 
 create or replace function public.integrantes_negocio(p_negocio uuid)

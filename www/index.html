@@ -418,7 +418,7 @@ async function crearSupabaseDB(cfg, sesion, neg) {
   let vivo = true;
   const negocioFila = await sbApi(cfg, '/rest/v1/negocio?id=eq.' + negId + '&select=codigo,nombre,creado_por', {}, token).then(a => (a && a[0]) || null);
   if (!negocioFila) { nbSet(NBK_NG, null); throw new Error('Ya no tienes acceso a ese negocio.'); }
-  /* La dueña del negocio es la cuenta que lo creó (negocio.creado_por) */
+  /* La dueño del negocio es la cuenta que lo creó (negocio.creado_por) */
   ES_DUENA = !!(sesion && sesion.uid && negocioFila.creado_por && negocioFila.creado_por === sesion.uid);
   nbSet(NBK_NG, { id: negId, nombre: negocioFila.nombre || neg.nombre || '', codigo: negocioFila.codigo });
   const snapDe = col => ({ docs: (S[col] || []).map(o => ({ id: o.id, data: () => o })) });
@@ -520,7 +520,7 @@ function mostrarBienvenida() {
   const d = document.createElement('div'); d.id = 'bienv';
   d.innerHTML = `<div class="bienvbox" role="dialog" aria-modal="true" aria-label="Bienvenida">
     <div class="lockbrand">Mi Negocio Al Día</div>
-    <p class="small muted">Entra para guardar tus datos en la nube y usarlos en tu teléfono y tu computadora, solos o con quien tú quieras. Las cuentas nuevas se abren solo con invitación de la dueña del negocio.</p>
+    <p class="small muted">Entra para guardar tus datos en la nube y usarlos en tu teléfono y tu computadora, solos o con quien tú quieras. Las cuentas nuevas se abren solo con invitación de la dueño del negocio.</p>
     <div class="f">
       <div class="full"><label for="f-nb-email">Correo</label><input id="f-nb-email" type="email" autocomplete="email" placeholder="tucorreo@ejemplo.com"></div>
       <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres"></div>
@@ -544,7 +544,7 @@ function enlaceDeCorreo() {
   const limpiar = () => { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} };
   if (h.get('error') || h.get('error_code') || q.get('error') || q.get('error_code')) {
     limpiar();
-    setTimeout(() => aviso('Ese enlace venció o ya se usó. Pide otro a la dueña del negocio.'), 600);
+    setTimeout(() => aviso('Ese enlace venció o ya se usó. Pide otro a la dueño del negocio.'), 600);
     return false;
   }
   /* Llave directa (recovery y signup por el flujo implícito o invitación) */
@@ -560,8 +560,8 @@ function enlaceDeCorreo() {
     limpiar();
     const cfg = nbCfg();
     sbApi(cfg, '/auth/v1/verify?token=' + encodeURIComponent(hashDado) + '&type=' + tipo, { method: 'POST', body: '{}' })
-      .then(s => { if (s && s.access_token) { RECUP = { access: s.access_token, refresh: s.refresh_token || '' }; mostrarNuevaClave(); } else { aviso('Ese enlace no sirve. Pide otro a la dueña del negocio.'); } })
-      .catch(() => aviso('Ese enlace venció o ya se usó. Pide otro a la dueña del negocio.'));
+      .then(s => { if (s && s.access_token) { RECUP = { access: s.access_token, refresh: s.refresh_token || '' }; mostrarNuevaClave(); } else { aviso('Ese enlace no sirve. Pide otro a la dueño del negocio.'); } })
+      .catch(() => aviso('Ese enlace venció o ya se usó. Pide otro a la dueño del negocio.'));
     return true;
   }
   return false;
@@ -632,7 +632,7 @@ function formNube() {
     <div class="full"><label for="f-nb-pass">Contraseña</label><input id="f-nb-pass" type="password" autocomplete="current-password" placeholder="Mínimo 6 caracteres"></div>
     <div class="full"><button class="btn pri" data-act="nube-entrar">Entrar con tu cuenta</button></div>
     <div class="full"><button class="btn sm" data-act="nube-olvide">Olvidé mi contraseña</button></div>
-    <p class="small muted" style="margin:2px 0 8px">Las cuentas nuevas se abren solo con invitación de la dueña del negocio.</p>
+    <p class="small muted" style="margin:2px 0 8px">Las cuentas nuevas se abren solo con invitación de la dueño del negocio.</p>
   </div>
   <details style="margin:6px 0 4px"><summary class="small muted" style="cursor:pointer">⚙️ Opción avanzada: cambiar de servidor</summary>
     <div class="f" style="margin-top:8px">
@@ -645,7 +645,7 @@ function formNube() {
   <div class="foot"><button class="btn pri" data-act="cerrar">Cerrar</button></div>`);
 }
 
-/* ----- panel de integrantes (solo la dueña): lista de cuentas en el negocio, y puede quitar a alguien ----- */
+/* ----- panel de integrantes (solo la dueño): lista de cuentas en el negocio, y puede quitar a alguien ----- */
 async function cargarIntegrantes() {
   const box = document.getElementById('integ'); if (!box || !ES_DUENA) return;
   const cfg = nbCfg(), ses = nbCta(), neg = nbNeg();
@@ -664,7 +664,7 @@ async function cargarIntegrantes() {
   const fil = (filas || []).filter(x => x && x.user_id).map(x => ({ uid: x.user_id, correo: x.correo || x.email || '', rol: x.rol || '', duena: !!x.es_duena || x.user_id === ses.uid }));
   if (!fil.length) { box.innerHTML = ''; return; }
   box.innerHTML = '<div class="panel"><div class="t" style="font-weight:700;margin-bottom:4px">Integrantes</div>' + fil.map((m, i) =>
-    `<div class="row" style="padding:8px 0${i ? ';border-top:1px solid var(--line)' : ''}"><div class="main"><div class="t">${esc(m.correo || 'cuenta ' + String(m.uid).slice(0, 8))}${m.duena ? ' <span class="pill ok">dueña</span>' : ''}</div><div class="s">${esc(m.rol || 'miembro')}</div></div>${ES_DUENA && !m.duena ? '<button class="btn sm" data-act="integ-quitar" data-u="' + esc(m.uid) + '">Quitar</button>' : ''}</div>`).join('') +
+    `<div class="row" style="padding:8px 0${i ? ';border-top:1px solid var(--line)' : ''}"><div class="main"><div class="t">${esc(m.correo || 'cuenta ' + String(m.uid).slice(0, 8))}${m.duena ? ' <span class="pill ok">dueño</span>' : ''}</div><div class="s">${esc(m.rol || 'miembro')}</div></div>${ES_DUENA && !m.duena ? '<button class="btn sm" data-act="integ-quitar" data-u="' + esc(m.uid) + '">Quitar</button>' : ''}</div>`).join('') +
     (fil.length === 1 ? '<p class="small muted" style="margin:4px 0 0">Solo estás tú. Otras personas entran con el código de invitación.</p>' : '') + '</div>';
 }
 
@@ -2019,7 +2019,7 @@ const ACT = {
         if (/Invalid login credentials|Email not confirmed/i.test(m)) { if (!/Email not confirmed/i.test(m)) throw er;
           throw new Error('Confirma tu correo con el enlace que te envió Supabase y vuelve a intentar.'); }
         if (/User already registered/i.test(m)) throw new Error('Ese correo ya tiene cuenta: usa la contraseña con la que la creaste.');
-        return sbCrear(cfg, email, pass).catch(e2 => { const m2 = String(e2 && e2.message || e2 || ''); if (/signups? not allowed|signup_disabled/i.test(m2)) throw new Error('El registro está cerrado: solo se abren cuentas nuevas con una invitación. Pide el enlace a la dueña del negocio.'); if (!/Password should be at least|invalid/i.test(m2)) { throw new Error(m2 || m); } throw e2; });
+        return sbCrear(cfg, email, pass).catch(e2 => { const m2 = String(e2 && e2.message || e2 || ''); if (/signups? not allowed|signup_disabled/i.test(m2)) throw new Error('El registro está cerrado: solo se abren cuentas nuevas con una invitación. Pide el enlace a la dueño del negocio.'); if (!/Password should be at least|invalid/i.test(m2)) { throw new Error(m2 || m); } throw e2; });
       });
       nbSet(NBK_S, { ...s, email });
       try { localStorage.removeItem(SIN_NUBE); } catch (e2) {}
