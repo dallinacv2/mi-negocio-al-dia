@@ -256,9 +256,9 @@ th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05
   <button type="button" class="lockforgot" id="lock-forgot">Olvidé mi PIN</button></div></div>
 <script>
 /* ===== Núcleo: datos, utilidades y cálculo de préstamos ===== */
-const DATA_COLS = ['clientes','prestamos','pagos','productos','ventas','gastos'];
+const DATA_COLS = ['clientes','prestamos','pagos','productos','ventas','gastos','notas'];
 const COLS = [...DATA_COLS, 'tipos', 'ajustes'];
-const S = {clientes:[],prestamos:[],pagos:[],productos:[],ventas:[],gastos:[],tipos:[],ajustes:[]};
+const S = {clientes:[],prestamos:[],pagos:[],productos:[],ventas:[],gastos:[],notas:[],tipos:[],ajustes:[]};
 const UI = {tab:'inicio', q:'', filtro:'todos', vg:'ventas', clienteId:null, desde:'', hasta:''};
 const cfg = () => S.ajustes.find(a => a.id === 'cfg') || {id: 'cfg', negocio: '', tel: '', dir: '', pie: 'Gracias por su confianza.', garantia: '', r: {}};
 /* Cada tipo de recibo tiene su título y un texto fijo propio (garantía, condiciones del préstamo, etc.) */
@@ -815,18 +815,18 @@ function deudaCliente(id) {
 }
 const stockBajo = p => p.stock <= (p.minimo || 0);
 /* ===== Pantallas: navegación, Inicio y Cobros ===== */
-const TABS = [['inicio','Inicio'],['cobros','Cobros'],['prestamos','Préstamos'],['clientes','Clientes'],['ventas','Ventas'],['inventario','Inventario'],['reportes','Reportes']];
+const TABS = [['inicio','Inicio'],['cobros','Cobros'],['prestamos','Préstamos'],['clientes','Clientes'],['ventas','Ventas'],['inventario','Inventario'],['notas','Notas'],['reportes','Reportes']];
 
 function pintar() {
   const a = document.activeElement, fid = a && a.id, pos = a && a.selectionStart;
   const cobros = agendaCobros(), atras = cobros.filter(c => c.dias > 0).length, bajo = S.productos.filter(stockBajo).length;
-  const cnt = {cobros: atras, inventario: bajo};
-  const icons = {inicio:'🏠',cobros:'💳',prestamos:'📄',clientes:'👥',ventas:'🛒',inventario:'📦',reportes:'📊'};
+  const cnt = {cobros: atras, inventario: bajo, notas: (S.notas || []).filter(n => n && n.texto && !n.estado).length};
+  const icons = {inicio:'🏠',cobros:'💳',prestamos:'📄',clientes:'👥',ventas:'🛒',inventario:'📦',notas:'📝',reportes:'📊'};
   const navHtml = TABS.map(([k, t]) => `<button role="tab" data-act="tab" data-k="${k}" aria-selected="${UI.tab === k}"><span class="nav-ico">${icons[k]||'•'}</span>${t}${cnt[k] ? `<span class="badge">${cnt[k]}</span>` : ''}</button>`).join('');
   if ($('#nav')) $('#nav').innerHTML = navHtml;
   if ($('#navSide')) $('#navSide').innerHTML = navHtml;
   $('#today').textContent = new Date().toLocaleDateString('es-DO', {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'});
-  const V = {inicio: vInicio, cobros: vCobros, prestamos: vPrestamos, clientes: vClientes, ventas: vVentas, inventario: vInventario, reportes: vReportes};
+  const V = {inicio: vInicio, cobros: vCobros, prestamos: vPrestamos, clientes: vClientes, ventas: vVentas, inventario: vInventario, notas: vNotas, reportes: vReportes};
   const b = cfg().negocio; if ($('#brandSide')) $('#brandSide').textContent = b || 'Mi Negocio Al Día';
   const brandEl = document.getElementById('brand'); if (brandEl) brandEl.innerHTML = b ? esc(b) : 'Mi Negocio <span>Al Día</span>';
   document.title = b || 'Mi Negocio Al Día';
@@ -1690,6 +1690,27 @@ function reciboPago(id) {
   mostrarRecibo({titulo: rc.titulo, texto: rc.texto, no: 'P-' + corto(x.id), fecha: x.fecha, cliente: cli.nombre || 'Cliente general', lineas, total: ['RECIBIDO', money(x.monto)]}, cli.tel);
 }
 
+/* ----- Notas: pedidos pendientes, ideas de mercancía, recordatorios. Simple: apuntar, hecha o descartada ----- */
+/* ----- Notas ----- */
+function vNotas() {
+  const ns = (S.notas || []).filter(n => n && n.texto);
+  const activas = ns.filter(n => !n.estado).sort((a, b) => b.creado - a.creado);
+  const hechas = ns.filter(n => n.estado === 'hecha').sort((a, b) => (b.hecha || 0) - (a.hecha || 0)).slice(0, 15);
+  const filaNota = n => {
+    const f = n.estado === 'hecha' && n.hecha ? ' · ' + new Date(n.hecha).toLocaleDateString('es-DO', {day:'numeric', month:'short'}) : '';
+    return `<div class="row" style="padding:12px 0;border-top:1px solid var(--line)">
+      <div class="main"><div class="t" style="white-space:pre-wrap;overflow-wrap:anywhere${n.estado === 'hecha' ? ';text-decoration:line-through;color:var(--muted)' : ''}">${esc(n.texto)}</div>${f ? `<div class="s">${f}</div>` : ''}</div>
+      ${n.estado === 'hecha' ? `<button class="btn sm" data-act="nota-revive" data-id="${esc(n.id)}">Reactivar</button><button class="btn sm" data-act="nota-del" data-id="${esc(n.id)}">Borrar</button>`
+        : `<button class="btn sm pri" data-act="nota-hecha" data-id="${esc(n.id)}">Hecha</button><button class="btn sm danger" data-act="nota-drop" data-id="${esc(n.id)}">Descartar</button>`}</div>`;
+  };
+  return `<h2>Notas</h2>
+  <p class="small muted" style="margin:0 0 10px">Encargos pendientes, ideas de mercancía para probar, lo que no quieras olvidar. Se guardan y se comparten como todo lo demás.</p>
+  <div class="f"><div class="full"><label for="f-nota-txt">Nueva nota</label><input id="f-nota-txt" type="text" autocomplete="off" placeholder="Ej: encargar 3 relojes a la tienda X"></div>
+  <div class="full"><button class="btn pri" data-act="nota-add" style="width:100%">Anotar</button></div></div>
+  <div class="panel" style="margin-top:12px">${activas.length ? activas.map(filaNota).join('') : vacio('Sin notas pendientes', '<div class="small muted">Todo limpio. Cuando tengas un encargo o una idea, anótala aquí.</div>')}</div>
+  ${hechas.length ? `<h3 style="font-size:15px;margin:16px 0 4px">Hechas</h3><div class="panel">${hechas.map(filaNota).join('')}</div><p class="small muted">Las hechas se van al final de la lista; bórralas cuando gustes.</p>` : ''}`;
+}
+
 /* ----- Reportes por fechas ----- */
 function rangoRapido(k) {
   const t = hoy();
@@ -2094,6 +2115,11 @@ const ACT = {
       if (ok) ofrecerSubirLocal(); else if (nbCta() && !nbNeg()) formNube();
     } catch (e) { aviso('No se pudo cambiar: ' + (e && e.message || e)); }
   },
+  'nota-add': async () => { const t = v$('nota-txt'); if (!t) return aviso('Escribe la nota primero.'); await guardar('notas', { texto: t, creado: Date.now() }); aviso('Anotado'); },
+  'nota-hecha': async el => { const n = (S.notas || []).find(x => x.id === el.dataset.id); if (n) { await guardar('notas', { ...n, estado: 'hecha', hecha: Date.now() }); aviso('Cumplido'); } },
+  'nota-drop': async el => { await borrar('notas', el.dataset.id); aviso('Nota descartada'); },
+  'nota-revive': async el => { const n = (S.notas || []).find(x => x.id === el.dataset.id); if (n) { delete n.estado; delete n.hecha; await guardar('notas', n); } },
+  'nota-del': async el => { await borrar('notas', el.dataset.id); aviso('Borrada'); },
   'bienv-local': () => { try { localStorage.setItem(SIN_NUBE, '1'); } catch (e) {} cerrarBienvenida(); },
   'integ-quitar': el => {
     const u = el.dataset.u; if (!u) return;
@@ -2213,6 +2239,26 @@ arrancar();
    APP_BUILD lo escribe GitHub al publicar; en desarrollo queda sin valor y no avisa nada. */
 const APP_BUILD = '__BUILD__';
 const REPO_GH = 'dallinacv2/mi-negocio-al-dia';
+/* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
+const NOVEDADES = [
+  {f: '30 de octubre 2026', t: ['Nueva pestaña 📝 Notas: anota encargos pendientes, ideas de mercancía o lo que no quieras olvidar; márcalas hechas o descártalas', 'Informe en pantalla de lo que trae cada actualización']},
+  {f: '30 de octubre 2026', t: ['Las invitaciones ya abren la pantalla de contraseña nueva', 'Registro cerrado: las cuentas nuevas solo por invitación del dueño', 'Panel de integrantes con correos y poder de sacar a alguien del negocio']},
+  {f: '29 de octubre 2026', t: ['Recuperación de contraseña por correo', 'Pantalla de bienvenida: entrar a la nube o usar sin conectar', 'Aviso de versión nueva para la web y el APK']}
+];
+function mostrarNovedades() {
+  const d = document.createElement('div'); d.className = 'veil'; d.style.zIndex = 140;
+  d.innerHTML = `<div class="sheet" role="dialog" aria-label="Novedades"><h2>📋 Novedades de esta versión</h2>
+    <p class="small muted" style="margin:0 0 10px">Lo que trajo esta actualización:</p>
+    <div class="panel" style="margin-bottom:12px">${NOVEDADES[0].t.map(x => `<div style="padding:7px 0;border-top:1px solid var(--line)">• ${esc(x)}</div>`).join('')}</div>
+    <details><summary class="small muted" style="cursor:pointer">Ver actualizaciones anteriores</summary>
+      ${NOVEDADES.slice(1).map(g => `<div class="small" style="margin-top:10px"><b>${esc(g.f)}</b><ul style="margin:2px 0 0 18px;padding:0;color:var(--muted)">${g.t.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`).join('')}
+    </details>
+    <div class="foot"><button class="btn pri" data-nv="listo">Listo</button></div></div>`;
+  d.addEventListener('click', e => { if (e.target === d || e.target.closest('[data-nv="listo"]')) d.remove(); });
+  document.body.appendChild(d);
+}
+/* Se muestra una sola vez por cada versión nueva (al abrir la app ya actualizada) */
+try { const visto = localStorage.getItem('mnad-novedades-visto'); if (/^\d+$/.test(APP_BUILD) && String(visto) !== APP_BUILD) { try { localStorage.setItem('mnad-novedades-visto', APP_BUILD); } catch (e2) {} mostrarNovedades(); } } catch (e) {}
 function avisoVersion(texto, boton, alPulsar) {
   if (document.getElementById('aviso-actualizar')) return;
   const b = document.createElement('div');
