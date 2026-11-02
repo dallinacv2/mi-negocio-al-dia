@@ -772,13 +772,14 @@ const esAbierto = p => p.modo === 'abierto';
 function detalleAbierto(p, fecha) {
   const pg = S.pagos.filter(x => x.tipo === 'prestamo' && x.refId === p.id).sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.creado || 0) - (b.creado || 0));
   const pagado = pg.reduce((a, x) => a + x.monto, 0), tasaMora = (p.mora || 0) / 100;
-  let cap = p.capital, mora = 0, idx = 0, interesPagado = 0, capitalPagado = 0;
+  let cap = p.capital, mora = 0, idx = 0, interesPagado = 0, capitalPagado = 0, condonado = 0;
   const per = [], asig = {};
   for (let k = 1; k <= 1200; k++) {
     const vence = fechaCuota(p, k), interes = cap > TOL ? r2(cap * p.tasa / 100) : 0;
     per.push({n: k, vence, monto: interes, abona: 0, falta: interes});
     while (idx < pg.length && pg[idx].fecha <= vence) {
       const x = pg[idx++]; let m = x.monto; const a = asig[x.id] = {interes: 0, capital: 0};
+      if (x.ajuste > 0) { const q = per[per.length - 1], aj = Math.min(x.ajuste, q.falta); q.falta = r2(q.falta - aj); q.monto = r2(q.monto - aj); condonado += aj; }
       for (const q of per) {
         if (m <= 0.0001) break; if (q.falta <= 0.0001) continue;
         const t = Math.min(q.falta, m); q.falta = r2(q.falta - t); q.abona = r2(q.abona + t); m -= t; a.interes += t; interesPagado += t;
@@ -800,7 +801,22 @@ function detalleAbierto(p, fecha) {
   const capitalPend = cap < TOL ? 0 : r2(cap), saldo = r2(capitalPend + interesPend);
   const interes = r2(cuotas.reduce((a, c) => a + c.monto, 0));
   return {abierto: true, cuotas, pagado, saldo, total: r2(p.capital + interes), interes, vc: r2(capitalPend * p.tasa / 100), mora, moraCobrada, moraPend: Math.max(0, r2(mora - moraCobrada)),
-    atrasoMax, vencido, proxima, saldado: saldo === 0, capitalPend, capitalPagado: r2(capitalPagado), interesPagado: r2(interesPagado), interesPend: r2(interesPend), asig};
+    atrasoMax, vencido, proxima, saldado: saldo === 0, capitalPend, capitalPagado: r2(capitalPagado), interesPagado: r2(interesPagado), condonado: r2(condonado), interesPend: r2(interesPend), asig};
+}
+/* Pago total de un préstamo abierto: capital + interés atrasado + interés del período en curso proporcional a los días corridos
+   (o exonerado si la dueña lo decide). 'ajuste' es lo que se perdona del interés del período en curso. */
+function liquidar(p, fecha, exonerar) {
+  const d = detalle(p, fecha), cur = d.cuotas.find(c => c.vence > fecha);
+  const atrasado = r2(d.cuotas.filter(c => c.vence <= fecha).reduce((a, c) => a + c.falta, 0));
+  let ajuste = 0, dias = 0, largo = 0, prorr = 0;
+  if (cur && cur.falta > 0) {
+    const ini = cur.n === 1 ? p.inicio : fechaCuota(p, cur.n - 1);
+    largo = Math.max(1, diffDias(cur.vence, ini)); dias = Math.min(largo, Math.max(0, diffDias(fecha, ini)));
+    prorr = exonerar ? 0 : r2(cur.monto * dias / largo);
+    ajuste = r2(Math.max(0, cur.falta - Math.max(0, r2(prorr - cur.abona))));
+  }
+  const enCurso = cur ? r2(cur.falta - ajuste) : 0;
+  return {d, capital: d.capitalPend, atrasado, enCurso, ajuste, dias, largo, completo: cur ? cur.monto : 0, total: r2(d.saldo - ajuste)};
 }
 function detalle(p, fecha = hoy()) {
   if (esAbierto(p)) return detalleAbierto(p, fecha);
@@ -1188,8 +1204,10 @@ function verPrestamo(id) {
   </div>
   <h3 style="margin:16px 0 6px;font-size:15px">Pagos recibidos</h3>
   ${pagos.length ? pagos.map(x => { const a = d.abierto && x.tipo === 'prestamo' ? d.asig[x.id] : null; return `<div class="row" style="padding-inline:0"><div class="main"><div class="t">${fmtF(x.fecha)} · ${x.tipo === 'mora' ? 'Mora' : a ? 'Interés' + (a.capital > 0 ? ' + capital' : '') : 'Cuota'}</div><div class="s">${a ? `Interés ${money(a.interes)} · Capital ${money(a.capital)}` + (x.nota ? ' · ' : '') : ''}${esc(x.nota || '')}</div></div><div class="amt">${money(x.monto)}</div><button class="btn sm" data-act="recibo-pago" data-id="${x.id}">Recibo</button></div>`; }).join('') : '<p class="small muted">Todavía no hay pagos.</p>'}
+  ${d.condonado > 0 ? `<p class="small muted">Interés del período en curso no cobrado en el pago total: ${money(d.condonado)}</p>` : ''}
   ${p.nota ? `<p class="small muted">Nota: ${esc(p.nota)}</p>` : ''}
   <div class="foot"><button class="btn" data-act="ver-prestamo-cliente" data-id="${id}">Vista para cliente</button><button class="btn danger" data-act="del-prestamo" data-id="${id}">Eliminar</button><button class="btn" data-act="recibo-prestamo" data-id="${id}">Recibo del préstamo</button><button class="btn" data-act="cerrar">Cerrar</button>
+    ${d.abierto && !d.saldado ? `<button class="btn" data-act="liquidar" data-id="${id}">Pago total</button>` : ''}
     ${d.saldado && d.moraPend <= 0 ? '' : `<button class="btn pri" data-act="cobrar" data-kind="prestamo" data-id="${id}">Registrar pago</button>`}</div>`);
 }
 
@@ -1360,6 +1378,35 @@ function formCobro(kind, id) {
     ${r.abierto ? '<div class="full preview" id="prev-cobro"></div>' : ''}</div>
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-cobro" data-kind="${kind}" data-id="${id}">Guardar pago</button></div>`);
   previewCobro();
+}
+function formLiquidar(id) {
+  const p = S.prestamos.find(x => x.id === id); if (!p) return;
+  abrir(`<h2>Pago total</h2><p style="margin:0 0 12px"><b>${esc(nombreCli(p.clienteId))}</b><br><span class="muted small">Se salda el capital y el interés. El interés del período en curso se cobra por los días corridos, o se exonera.</span></p>
+    <div class="f" data-live="liquidar" data-id="${id}">
+    ${fld('fecha', 'Fecha del pago', hoy(), 'date')}
+    ${sel('exo', 'Interés del período en curso', [['prop', 'Cobrar proporcional a los días'], ['exo', 'Exonerar (no cobrarlo)']], 'prop', 'full')}
+    ${fld('nota', 'Nota (efectivo, transferencia…)', '', 'text', '', 'full')}
+    <div class="full preview" id="prev-liq"></div></div>
+    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-liquidar" data-id="${id}">Registrar pago total</button></div>`);
+  previewLiquidar();
+}
+function previewLiquidar() {
+  const live = document.querySelector('[data-live="liquidar"]'), e = $('#prev-liq'); if (!live || !e) return;
+  const p = S.prestamos.find(x => x.id === live.dataset.id); if (!p) return;
+  const L = liquidar(p, v$('fecha') || hoy(), v$('exo') === 'exo');
+  e.innerHTML = `Capital pendiente <b class="num">${money(L.capital)}</b>` + (L.atrasado > 0 ? `<br>Interés atrasado <b class="num">${money(L.atrasado)}</b>` : '')
+    + (L.completo > 0 ? `<br>Interés del período en curso <b class="num">${money(L.enCurso)}</b> <span class="muted">(${v$('exo') === 'exo' ? 'exonerado' : `${L.dias} de ${L.largo} días de ${money(L.completo)}`})</span>` : '')
+    + `<br><b>Total a cobrar: <span class="num">${money(L.total)}</span></b>` + (L.d.moraPend > 0 ? `<br><span class="muted small">Además queda mora pendiente de ${money(L.d.moraPend)} (se cobra aparte).</span>` : '');
+}
+async function saveLiquidar(id) {
+  const p = S.prestamos.find(x => x.id === id); if (!p) return;
+  const fecha = v$('fecha') || hoy(); if (fecha < p.inicio) return aviso('La fecha no puede ser anterior al préstamo.');
+  const exo = v$('exo') === 'exo', L = liquidar(p, fecha, exo);
+  if (L.total <= 0) return aviso('Este préstamo no tiene saldo pendiente.');
+  const nota = [v$('nota'), 'Pago total' + (L.ajuste > 0 ? (exo ? ' · interés del período exonerado' : ' · interés del período proporcional') : '')].filter(Boolean).join(' · ');
+  const pago = {id: uid(), tipo: 'prestamo', refId: id, clienteId: p.clienteId, monto: L.total, fecha, nota, liq: true, ajuste: L.ajuste, creado: Date.now()};
+  await guardar('pagos', pago);
+  cerrar(); aviso('Préstamo saldado'); reciboPago(pago.id);
 }
 /* Préstamo abierto: muestra cómo se reparte el pago entre interés y capital antes de guardarlo */
 function previewCobro() {
@@ -1741,7 +1788,9 @@ function reciboPago(id) {
   if (x.tipo === 'prestamo' && esAbierto(S.prestamos.find(y => y.id === x.refId) || {})) {
     const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p), a = d.asig[x.id] || {interes: x.monto, capital: 0};
     const capAl = p.capital - S.pagos.filter(y => y.tipo === 'prestamo' && y.refId === p.id && antes(y)).reduce((t, y) => t + ((d.asig[y.id] || {}).capital || 0), 0);
-    lineas = [['Concepto', 'Pago de préstamo abierto'], ['Interés pagado', money(a.interes)], ['Abono a capital', money(a.capital)], ['Capital pendiente', money(Math.max(0, capAl))]];
+    lineas = [['Concepto', x.liq ? 'Pago total del préstamo' : 'Pago de préstamo abierto'], ['Interés pagado', money(a.interes)], ['Abono a capital', money(a.capital)]];
+    if (x.ajuste > 0) lineas.push(['Interés del período no cobrado', money(x.ajuste)]);
+    lineas.push(['Capital pendiente', money(Math.max(0, capAl))]);
     if (x.nota) lineas.push(['Nota', x.nota]);
   } else if (x.tipo === 'prestamo') {
     const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p);
@@ -2087,7 +2136,7 @@ const ACT = {
   ejemplos: () => cargarEjemplos(), 'quitar-ejemplos': () => quitarEjemplos(),
   'nuevo-cliente': () => formCliente(), 'edit-cliente': el => formCliente(el.dataset.id), 'ver-cliente': el => verCliente(el.dataset.id),
   'save-cliente': el => saveCliente(el.dataset.id),
-  'nuevo-prestamo': el => formPrestamo(el.dataset.cli), 'save-prestamo': () => savePrestamo(), 'ver-prestamo': el => verPrestamo(el.dataset.id),
+  'nuevo-prestamo': el => formPrestamo(el.dataset.cli), 'save-prestamo': () => savePrestamo(), 'liquidar': el => formLiquidar(el.dataset.id), 'save-liquidar': el => saveLiquidar(el.dataset.id), 'ver-prestamo': el => verPrestamo(el.dataset.id),
   cobrar: el => formCobro(el.dataset.kind, el.dataset.id), financiar: el => formFinanciar(el.dataset.id), 'save-financiar': el => saveFinanciar(el.dataset.id),
   'save-cobro': el => saveCobro(el.dataset.kind, el.dataset.id),
   tipos: () => formTipos(), 'nuevo-tipo': () => formTipo(), 'edit-tipo': el => formTipo(el.dataset.id), 'save-tipo': el => saveTipo(el.dataset.id),
@@ -2244,7 +2293,7 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => {
   if (e.target.id === 'q') { UI.q = e.target.value; pintar(); return; }
   const live = e.target.closest('[data-live]'); if (!live) return;
-  if (live.dataset.live === 'prestamo') previewPrestamo(); else if (live.dataset.live === 'venta') previewVenta(); else if (live.dataset.live === 'cobro') previewCobro();
+  if (live.dataset.live === 'prestamo') previewPrestamo(); else if (live.dataset.live === 'venta') previewVenta(); else if (live.dataset.live === 'cobro') previewCobro(); else if (live.dataset.live === 'liquidar') previewLiquidar();
 });
 const setV = (id, v) => { const e = document.getElementById('f-' + id); if (e) e.value = v; };
 document.addEventListener('change', e => {
@@ -2255,7 +2304,7 @@ document.addEventListener('change', e => {
   if (id === 'f-tipo') { const t = S.tipos.find(x => x.id === e.target.value); if (t) { setV('tasa', t.tasa); setV('base', t.base); setV('cuotas', t.cuotas); setV('freq', t.freq); setV('mora', t.mora || 0); setV('cond', t.cond || ''); } previewPrestamo(); return; }
   if (id === 'f-concepto') { const live = e.target.closest('[data-live]'); if (live) { const r = cobroInfo(live.dataset.kind, live.dataset.id, e.target.value); setV('monto', Math.round(r.sug * 100) / 100); const t = $('#cobro-tit'); if (t) t.textContent = `${r.tit} · pendiente ${money(r.saldo)}`; previewCobro(); } return; }
   if (e.target.classList.contains('vp')) { const p = producto(e.target.value), l = e.target.closest('.vl'), r = l.querySelector('.vpr'); r.placeholder = p ? p.precio : ''; r.value = ''; l.querySelector('.vg').value = p ? (p.garantia || cfg().garantia || '') : ''; }
-  const live = e.target.closest('[data-live]'); if (live && live.dataset.live === 'venta') previewVenta();
+  const live = e.target.closest('[data-live]'); if (live && live.dataset.live === 'venta') previewVenta(); else if (live && live.dataset.live === 'liquidar') previewLiquidar();
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#modal').firstChild) cerrar(); });
 
