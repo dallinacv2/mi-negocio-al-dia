@@ -1297,7 +1297,9 @@ const sel = (id, label, opts, cur, cls = '', extra = '') =>
 const optsCli = (vacioTxt) => [['', vacioTxt], ...S.clientes.map(c => [c.id, c.nombre])];
 
 /* ----- Cliente ----- */
-function formCliente(id) {
+let VOLVER_A = '';   /* si el cliente se creó desde un préstamo o una venta, al guardarlo se vuelve a ese formulario */
+function formCliente(id, volver) {
+  VOLVER_A = volver || '';
   const c = cliente(id) || {};
   abrir(`<h2>${id ? 'Editar cliente' : 'Nuevo cliente'}</h2><div class="f">
     ${fld('nombre', 'Nombre', c.nombre, 'text', 'autocomplete="off"', 'full')}${fld('tel', 'Teléfono (WhatsApp)', c.tel, 'tel')}${fld('doc', 'Cédula', c.doc)}${fld('dir', 'Dirección', c.dir, 'text', '', 'full')}</div>
@@ -1306,15 +1308,19 @@ function formCliente(id) {
 async function saveCliente(id) {
   if (!v$('nombre')) return aviso('Escribe el nombre del cliente.');
   const c = cliente(id) || {id: id || uid(), creado: Date.now()};
-  await guardar('clientes', {...c, nombre: v$('nombre'), tel: v$('tel'), doc: v$('doc'), dir: v$('dir')});
+  const nuevo = {...c, nombre: v$('nombre'), tel: v$('tel'), doc: v$('doc'), dir: v$('dir')};
+  await guardar('clientes', nuevo);
+  const volver = VOLVER_A; VOLVER_A = '';
   cerrar(); aviso('Cliente guardado');
+  if (!id && volver === 'prestamo') formPrestamo(nuevo.id); else if (!id && volver === 'venta') formVenta(nuevo.id);
 }
 
 /* ----- Préstamo ----- */
 function formPrestamo(cli) {
-  if (!S.clientes.length) { aviso('Primero agrega un cliente.'); return formCliente(); }
+  if (!S.clientes.length) { aviso('Primero agrega un cliente.'); return formCliente(undefined, 'prestamo'); }
   abrir(`<h2>Nuevo préstamo</h2><div class="f" data-live="prestamo">
     ${sel('cli', 'Cliente', optsCli('Elige un cliente').slice(1), cli || S.clientes[0].id, 'full')}
+    <div class="full"><button type="button" class="btn sm" data-act="cliente-rapido" data-from="prestamo">+ Nuevo cliente</button></div>
     ${S.tipos.length ? sel('tipo', 'Tipo de préstamo (llena los datos solo)', [['', 'Personalizado'], ...S.tipos.map(t => [t.id, `${t.nombre} · ${t.tasa}% ${t.base === 'mensual' ? 'mensual' : 'total'} · ${t.cuotas} cuotas ${FREQ_P[t.freq]}`])], '', 'full') : ''}
     ${sel('modo', 'Modalidad', [['cuotas', 'Con cuotas fijas'], ['abierto', 'Abierto: solo paga el interés']], 'cuotas', 'full')}
     ${fld('capital', 'Monto prestado (RD$)', '', 'number', 'placeholder="10000"')}${fld('tasa', 'Porcentaje de interés', '', 'number', 'placeholder="20"')}
@@ -1430,10 +1436,11 @@ const lineaVenta = () => `<div class="vl" style="display:grid;grid-template-colu
   <select class="vp" aria-label="Producto">${[['', 'Producto…'], ...S.productos.map(p => [p.id, `${p.nombre} (${p.stock})`])].map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('')}</select>
   <input class="vc" type="number" min="1" step="any" value="1" aria-label="Cantidad"><input class="vpr" type="number" min="0" step="any" aria-label="Precio"><button class="btn sm" data-act="quitar-linea" aria-label="Quitar">×</button>
   <input class="vg" type="text" style="grid-column:1/-1" placeholder="Garantía (se llena sola según el producto; puedes cambiarla)" aria-label="Garantía"></div>`;
-function formVenta() {
+function formVenta(cli) {
   if (!S.productos.length) { aviso('Primero agrega productos al inventario.'); return formProducto(); }
   abrir(`<h2>Nueva venta</h2><div class="f" data-live="venta">
-    ${sel('cli', 'Cliente (opcional si pagan todo)', optsCli('Cliente general'), '', 'full')}
+    ${sel('cli', 'Cliente (opcional si pagan todo)', optsCli('Cliente general'), cli || '', 'full')}
+    <div class="full"><button type="button" class="btn sm" data-act="cliente-rapido" data-from="venta">+ Nuevo cliente</button></div>
     <div class="full"><label>Productos, cantidad y precio</label><div id="lineas">${lineaVenta()}</div><button class="btn sm" data-act="mas-linea">Agregar otro producto</button></div>
     <div class="full preview" id="tv">Total: <b class="num">${money(0)}</b></div>
     ${fld('cobrado', 'Cobrado ahora (RD$)', '', 'number', 'placeholder="Todo, si lo dejas vacío"')}${fld('fecha', 'Fecha', hoy(), 'date')}
@@ -2134,7 +2141,7 @@ const ACT = {
   vg: el => { UI.vg = el.dataset.k; UI.q = ''; pintar(); },
   cerrar, fondo: () => cerrar(),
   ejemplos: () => cargarEjemplos(), 'quitar-ejemplos': () => quitarEjemplos(),
-  'nuevo-cliente': () => formCliente(), 'edit-cliente': el => formCliente(el.dataset.id), 'ver-cliente': el => verCliente(el.dataset.id),
+  'nuevo-cliente': () => formCliente(), 'cliente-rapido': el => formCliente(undefined, el.dataset.from), 'edit-cliente': el => formCliente(el.dataset.id), 'ver-cliente': el => verCliente(el.dataset.id),
   'save-cliente': el => saveCliente(el.dataset.id),
   'nuevo-prestamo': el => formPrestamo(el.dataset.cli), 'save-prestamo': () => savePrestamo(), 'liquidar': el => formLiquidar(el.dataset.id), 'save-liquidar': el => saveLiquidar(el.dataset.id), 'ver-prestamo': el => verPrestamo(el.dataset.id),
   cobrar: el => formCobro(el.dataset.kind, el.dataset.id), financiar: el => formFinanciar(el.dataset.id), 'save-financiar': el => saveFinanciar(el.dataset.id),
@@ -2368,6 +2375,7 @@ const BUILD_MINIMO = '1050';
 const NECESITA_ACT = /^\d+$/.test(APP_BUILD) && /^\d+$/.test(BUILD_MINIMO) && parseInt(APP_BUILD, 10) < parseInt(BUILD_MINIMO, 10);
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
+  {f: '2 de noviembre', t: ['Nuevo préstamo y Nueva venta: botón "+ Nuevo cliente" para crear el cliente sin salir; al guardarlo vuelves al formulario con ese cliente ya elegido']},
   {f: '1 de noviembre — noche', t: ['Nuevo préstamo ABIERTO: el cliente paga solo el interés de cada período y el capital no se mueve; el interés se calcula sobre el saldo actual', 'Lo que el cliente pague de más del interés abona a capital y baja el próximo interés (al registrar el pago ves cómo se reparte)', 'Botón Pago total: cobra el capital y el interés del período en curso proporcional a los días, o lo exonera si tú decides', 'Los recibos, reportes y el archivo exportado ya reconocen los préstamos abiertos']},
   {f: '30 de octubre — tarde', t: ['Gráfico de Ventas del mes: los números de los días volvieron a su columna (se estaban amontonando)', 'El informe de novedades ya no desaparece si la app se recarga antes de que lo leas', 'Actualización forzada disponible y dormida: solo actúa si algún día lo pides']},
   {f: '30 de octubre — mediodía', t: ['Nueva pestaña 📝 Notas: encargos pendientes, ideas de mercancía o recordatorios; márcalas hechas o descártalas', 'Informe en pantalla de lo que trae cada actualización', 'El APK de releases ahora se llama MiNegocioAlDia-versión.apk']},
