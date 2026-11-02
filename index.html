@@ -764,7 +764,46 @@ function fechaCuota(p, i) { return p.freq === 'mensual' ? sumaMeses(p.inicio, i)
 /* El dinero cobrado se aplica a la cuota más antigua primero */
 /* Mora: cada cuota genera cargo por día de atraso (% de la cuota). Si ya se pagó tarde, el cargo se queda; si sigue pendiente, sigue creciendo.
    La mora se cobra aparte (pagos tipo 'mora') y no se suma al saldo del préstamo. */
+const esc2 = p => esAbierto(p) ? `abierto ${p.tasa}% ${FREQ_N[p.freq]}` : `${p.cuotas} cuotas ${FREQ_P[p.freq]}`;
+/* Préstamo ABIERTO: el cliente paga solo el interés de cada período y el capital no se mueve hasta que abone.
+   Interés del período = saldo de capital al inicio del período × tasa. Cada pago cubre primero el interés pendiente más antiguo
+   (incluido el del período en curso) y lo que sobre abona a capital, así el siguiente interés baja. Termina cuando capital e interés llegan a 0. */
+const esAbierto = p => p.modo === 'abierto';
+function detalleAbierto(p, fecha) {
+  const pg = S.pagos.filter(x => x.tipo === 'prestamo' && x.refId === p.id).sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.creado || 0) - (b.creado || 0));
+  const pagado = pg.reduce((a, x) => a + x.monto, 0), tasaMora = (p.mora || 0) / 100;
+  let cap = p.capital, mora = 0, idx = 0, interesPagado = 0, capitalPagado = 0;
+  const per = [], asig = {};
+  for (let k = 1; k <= 1200; k++) {
+    const vence = fechaCuota(p, k), interes = cap > TOL ? r2(cap * p.tasa / 100) : 0;
+    per.push({n: k, vence, monto: interes, abona: 0, falta: interes});
+    while (idx < pg.length && pg[idx].fecha <= vence) {
+      const x = pg[idx++]; let m = x.monto; const a = asig[x.id] = {interes: 0, capital: 0};
+      for (const q of per) {
+        if (m <= 0.0001) break; if (q.falta <= 0.0001) continue;
+        const t = Math.min(q.falta, m); q.falta = r2(q.falta - t); q.abona = r2(q.abona + t); m -= t; a.interes += t; interesPagado += t;
+        mora += t * tasaMora * Math.max(0, diffDias(x.fecha, q.vence));
+      }
+      if (m > 0.0001) { const t = Math.min(m, cap); cap = r2(cap - t); a.capital += t; capitalPagado += t; }
+    }
+    if (vence > fecha && idx >= pg.length) break;
+  }
+  const cuotas = per.filter(q => q.monto > 0).map(q => {
+    const falta = q.falta < TOL ? 0 : q.falta, dias = falta > 0 ? Math.max(0, diffDias(fecha, q.vence)) : 0;
+    let estado = 'pendiente'; if (falta === 0) estado = 'pagada'; else if (dias > 0) estado = 'vencida'; else if (q.abona > 0) estado = 'parcial';
+    return {n: q.n, vence: q.vence, monto: q.monto, abona: q.abona, falta, dias, estado};
+  });
+  let vencido = 0, atrasoMax = 0, proxima = null, interesPend = 0;
+  cuotas.forEach(c => { interesPend += c.falta; if (c.estado === 'vencida') { vencido += c.falta; atrasoMax = Math.max(atrasoMax, c.dias); mora += c.falta * tasaMora * c.dias; } if (c.falta > 0 && !proxima) proxima = {n: c.n, vence: c.vence, falta: c.falta, dias: c.dias}; });
+  mora = r2(mora);
+  const moraCobrada = S.pagos.filter(x => x.tipo === 'mora' && x.refId === p.id).reduce((a, x) => a + x.monto, 0);
+  const capitalPend = cap < TOL ? 0 : r2(cap), saldo = r2(capitalPend + interesPend);
+  const interes = r2(cuotas.reduce((a, c) => a + c.monto, 0));
+  return {abierto: true, cuotas, pagado, saldo, total: r2(p.capital + interes), interes, vc: r2(capitalPend * p.tasa / 100), mora, moraCobrada, moraPend: Math.max(0, r2(mora - moraCobrada)),
+    atrasoMax, vencido, proxima, saldado: saldo === 0, capitalPend, capitalPagado: r2(capitalPagado), interesPagado: r2(interesPagado), interesPend: r2(interesPend), asig};
+}
 function detalle(p, fecha = hoy()) {
+  if (esAbierto(p)) return detalleAbierto(p, fecha);
   const pg = S.pagos.filter(x => x.tipo === 'prestamo' && x.refId === p.id).sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.creado || 0) - (b.creado || 0));
   const pagado = pg.reduce((a, x) => a + x.monto, 0);
   const vc = valorCuota(p), tasaMora = (p.mora || 0) / 100;
@@ -855,13 +894,14 @@ function agendaCobros() {
     const cli = cliente(p.clienteId) || {};
     if (d.saldado || !d.proxima) {
       if (d.moraPend > 0) out.push({kind: 'prestamo', id: p.id, nombre: cli.nombre || 'Sin cliente', tel: cli.tel, vence: '', dias: 0, monto: d.moraPend, mora: d.moraPend, soloMora: true,
-        det: `Préstamo ${FREQ_N[p.freq]} saldado · solo queda la mora`});
+        det: esAbierto(p) ? `Préstamo abierto ${FREQ_N[p.freq]} · solo queda la mora` : `Préstamo ${FREQ_N[p.freq]} saldado · solo queda la mora`});
       return;
     }
     const monto = d.vencido > 0 ? d.vencido : d.proxima.falta;
     const venc = d.cuotas.filter(c => c.estado === 'vencida').length;
     out.push({kind: 'prestamo', id: p.id, nombre: cli.nombre || 'Sin cliente', tel: cli.tel, vence: d.proxima.vence, dias: d.atrasoMax, monto, mora: d.moraPend,
-      det: `Préstamo ${FREQ_N[p.freq]} · cuota ${d.proxima.n} de ${p.cuotas}` + (venc > 1 ? ` · ${venc} cuotas atrasadas` : '')});
+      det: esAbierto(p) ? `Préstamo abierto ${FREQ_N[p.freq]} · interés ${d.proxima.n} · capital ${money(d.capitalPend)}` + (venc > 1 ? ` · ${venc} intereses atrasados` : '')
+        : `Préstamo ${FREQ_N[p.freq]} · cuota ${d.proxima.n} de ${p.cuotas}` + (venc > 1 ? ` · ${venc} cuotas atrasadas` : '')});
   });
   S.ventas.forEach(v => {
     const s = ventaSaldo(v); if (s <= 0) return;
@@ -983,7 +1023,7 @@ function vPrestamos() {
     .filter(({d}) => f === 'todos' ? true : f === 'activos' ? !d.saldado : f === 'atrasados' ? d.atrasoMax > 0 : d.saldado)
     .sort((a, b) => b.d.atrasoMax - a.d.atrasoMax);
   const activos = S.prestamos.map(p => detalle(p)).filter(d => !d.saldado);
-  const capitalCalle = S.prestamos.filter(p => !detalle(p).saldado).reduce((a, p) => a + p.capital, 0);
+  const capitalCalle = S.prestamos.reduce((a, p) => { const d = detalle(p); return d.saldado ? a : a + (d.abierto ? d.capitalPend : p.capital); }, 0);
   const interesPend = activos.reduce((a, d) => a + d.interes, 0);
   const chip = (k, t) => `<button data-act="filtro" data-k="${k}" aria-pressed="${f === k}">${t}</button>`;
   return `<div class="grid kpis" style="margin-bottom:14px">
@@ -992,9 +1032,9 @@ function vPrestamos() {
     <div class="kpi"><div class="l">Por cobrar</div><div class="v">${money(activos.reduce((a, d) => a + d.saldo, 0))}</div></div></div>
   <div class="tools">${buscaBox('Buscar por cliente')}<div class="seg">${chip('todos', 'Todos')}${chip('activos', 'Activos')}${chip('atrasados', 'Atrasados')}${chip('saldados', 'Saldados')}</div>
     <button class="btn" data-act="tipos">Tipos de préstamo</button><button class="btn pri" data-act="nuevo-prestamo">Nuevo préstamo</button></div>
-  <div class="panel">${L.length ? L.map(({p, d}) => { const e = estadoPrestamo(p); const pct = Math.min(100, d.pagado / d.total * 100);
+  <div class="panel">${L.length ? L.map(({p, d}) => { const e = estadoPrestamo(p); const pct = Math.min(100, d.abierto ? d.capitalPagado / p.capital * 100 : d.pagado / d.total * 100);
     return `<div class="row click" data-act="ver-prestamo" data-id="${p.id}"><div class="main"><div class="t">${esc(nombreCli(p.clienteId))} <span class="pill ${e.cls}">${e.txt}</span></div>
-      <div class="s">${money(p.capital)} al ${p.tasa}% ${p.base === 'mensual' ? 'mensual' : 'total'} · ${p.cuotas} cuotas ${FREQ_P[p.freq]} de ${money(d.vc)} · desde ${fmtC(p.inicio)}</div>
+      <div class="s">${d.abierto ? `Abierto · capital ${money(d.capitalPend)} al ${p.tasa}% ${FREQ_N[p.freq]} · interés ${money(d.vc)} · desde ${fmtC(p.inicio)}` : `${money(p.capital)} al ${p.tasa}% ${p.base === 'mensual' ? 'mensual' : 'total'} · ${p.cuotas} cuotas ${FREQ_P[p.freq]} de ${money(d.vc)} · desde ${fmtC(p.inicio)}`}</div>
       <div class="bar"><i style="width:${pct}%"></i></div></div>
       <div class="amt">${money(d.saldo)}<div class="small muted">pendiente</div></div></div>`; }).join('')
     : vacio(S.prestamos.length ? 'Sin resultados' : 'Aún no hay préstamos', S.prestamos.length ? 'Prueba con otro filtro o nombre.' : 'Crea uno con capital, porcentaje y número de cuotas. Las fechas de pago se calculan solas.')}</div>`;
@@ -1009,7 +1049,7 @@ function verPrestamoCliente(id) {
   if (d.saldado && d.moraPend <= 0) {
     proximoHtml = '<div class="panel"><div class="row"><div class="main"><div class="t">Préstamo saldado</div><div class="s">No hay pagos pendientes</div></div></div></div>';
   } else if (d.proxima) {
-    proximoHtml = `<div class="panel"><div class="row"><div class="main"><div class="t">Próximo pago - Cuota ${d.proxima.n}</div><div class="s">Vence: ${fmtF(d.proxima.vence)}${d.proxima.dias > 0 ? ' · ' + d.proxima.dias + ' día' + (d.proxima.dias === 1 ? '' : 's') + ' de atraso' : ''}</div></div><div class="amt">${money(d.proxima.falta)}<div class="small muted">a pagar</div></div></div></div>`;
+    proximoHtml = `<div class="panel"><div class="row"><div class="main"><div class="t">${d.abierto ? 'Próximo interés - Período' : 'Próximo pago - Cuota'} ${d.proxima.n}</div><div class="s">Vence: ${fmtF(d.proxima.vence)}${d.proxima.dias > 0 ? ' · ' + d.proxima.dias + ' día' + (d.proxima.dias === 1 ? '' : 's') + ' de atraso' : ''}</div></div><div class="amt">${money(d.proxima.falta)}<div class="small muted">a pagar</div></div></div></div>`;
   } else if (d.moraPend > 0) {
     proximoHtml = `<div class="panel"><div class="row"><div class="main"><div class="t">Solo mora pendiente</div><div class="s">Préstamo saldado, queda mora por cobrar</div></div><div class="amt">${money(d.moraPend)}<div class="small muted">mora</div></div></div></div>`;
   }
@@ -1017,11 +1057,12 @@ function verPrestamoCliente(id) {
   abrir(`<h2>${esc(cli.nombre || 'Sin cliente')} <span class="pill ${e.cls}">${e.txt}</span></h2>
   <div class="grid kpis" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:12px">
     <div class="kpi"><div class="l">Monto del préstamo</div><div class="v" style="font-size:17px">${money(p.capital)}</div></div>
-    <div class="kpi"><div class="l">Cuotas</div><div class="v" style="font-size:17px">${p.cuotas} ${FREQ_P[p.freq]}</div></div>
-    <div class="kpi"><div class="l">Valor cuota</div><div class="v" style="font-size:17px">${money(d.vc)}</div></div>
+    ${d.abierto ? `<div class="kpi"><div class="l">Interés</div><div class="v" style="font-size:17px">${p.tasa}% ${FREQ_N[p.freq]}</div></div>
+    <div class="kpi"><div class="l">Interés del período</div><div class="v" style="font-size:17px">${money(d.vc)}</div></div>` : `<div class="kpi"><div class="l">Cuotas</div><div class="v" style="font-size:17px">${p.cuotas} ${FREQ_P[p.freq]}</div></div>
+    <div class="kpi"><div class="l">Valor cuota</div><div class="v" style="font-size:17px">${money(d.vc)}</div></div>`}
     <div class="kpi ok"><div class="l">Pagado</div><div class="v" style="font-size:17px">${money(d.pagado)}</div></div>
-    <div class="kpi ${d.saldo > 0 ? 'bad' : 'ok'}"><div class="l">Saldo pendiente</div><div class="v" style="font-size:17px">${money(d.saldo)}</div></div>
-    <div class="kpi"><div class="l">Total a pagar</div><div class="v" style="font-size:17px">${money(d.total)}</div></div>
+    <div class="kpi ${d.saldo > 0 ? 'bad' : 'ok'}"><div class="l">${d.abierto ? 'Debe en total' : 'Saldo pendiente'}</div><div class="v" style="font-size:17px">${money(d.saldo)}</div></div>
+    <div class="kpi"><div class="l">${d.abierto ? 'Capital pendiente' : 'Total a pagar'}</div><div class="v" style="font-size:17px">${money(d.abierto ? d.capitalPend : d.total)}</div></div>
   </div>
   <h3 style="margin:16px 0 6px;font-size:15px">Próximo vencimiento</h3>
   ${proximoHtml}
@@ -1043,7 +1084,7 @@ function imprimirPrestamoCliente(id) {
   if (d.saldado && d.moraPend <= 0) {
     proximoTxt = 'Préstamo saldado - No hay pagos pendientes';
   } else if (d.proxima) {
-    proximoTxt = `Próxima cuota ${d.proxima.n} vence ${fmtF(d.proxima.vence)}${d.proxima.dias > 0 ? ' (' + d.proxima.dias + ' día' + (d.proxima.dias === 1 ? '' : 's') + ' de atraso)' : ''} - ${money(d.proxima.falta)}`;
+    proximoTxt = `${d.abierto ? 'Próximo interés (período' : 'Próxima cuota'} ${d.proxima.n}${d.abierto ? ')' : ''} vence ${fmtF(d.proxima.vence)}${d.proxima.dias > 0 ? ' (' + d.proxima.dias + ' día' + (d.proxima.dias === 1 ? '' : 's') + ' de atraso)' : ''} - ${money(d.proxima.falta)}`;
   } else if (d.moraPend > 0) {
     proximoTxt = `Solo mora pendiente - ${money(d.moraPend)}`;
   }
@@ -1064,9 +1105,9 @@ function imprimirPrestamoCliente(id) {
   <div>Estado: <b>${e.txt}</b></div>
   <div class="row">
     <div class="box">Monto: <b>${money(p.capital)}</b></div>
-    <div class="box">Cuotas: <b>${p.cuotas} ${FREQ_P[p.freq]}</b></div>
-    <div class="box">Valor cuota: <b>${money(d.vc)}</b></div>
-    <div class="box">Total: <b>${money(d.total)}</b></div>
+    <div class="box">${d.abierto ? `Interés: <b>${p.tasa}% ${FREQ_N[p.freq]}</b>` : `Cuotas: <b>${p.cuotas} ${FREQ_P[p.freq]}</b>`}</div>
+    <div class="box">${d.abierto ? 'Interés del período' : 'Valor cuota'}: <b>${money(d.vc)}</b></div>
+    <div class="box">${d.abierto ? 'Capital pendiente' : 'Total'}: <b>${money(d.abierto ? d.capitalPend : d.total)}</b></div>
     <div class="box">Pagado: <b>${money(d.pagado)}</b></div>
     <div class="box">Saldo pendiente: <b>${money(d.saldo)}</b></div>
   </div>
@@ -1112,10 +1153,10 @@ function imprimirTablaPrestamo(id) {
   </head><body>
   <h1>Mi Negocio Al Día - Tabla de amortización completa</h1>
   <div>Cliente: <b>${esc(cli.nombre || 'Sin cliente')}</b></div>
-  <div>Préstamo: ${money(p.capital)} al ${p.tasa}% ${p.base==='mensual'?'mensual':'total'} · ${p.cuotas} cuotas ${FREQ_P[p.freq]} · Estado: ${e.txt}</div>
+  <div>${d.abierto ? `Préstamo abierto: ${money(p.capital)} al ${p.tasa}% ${FREQ_N[p.freq]} sobre el saldo · Capital pendiente ${money(d.capitalPend)}` : `Préstamo: ${money(p.capital)} al ${p.tasa}% ${p.base==='mensual'?'mensual':'total'} · ${p.cuotas} cuotas ${FREQ_P[p.freq]}`} · Estado: ${e.txt}</div>
   <div>Total: ${money(d.total)} · Pagado: ${money(d.pagado)} · Saldo: ${money(d.saldo)} · Mora pendiente: ${money(d.moraPend)} (separada)</div>
   <table>
-    <thead><tr><th>#</th><th>Vence</th><th class="num">Cuota</th><th class="num">Abonado</th><th class="num">Falta</th><th>Estado</th></tr></thead>
+    <thead><tr><th>#</th><th>Vence</th><th class="num">${d.abierto ? 'Interés' : 'Cuota'}</th><th class="num">Abonado</th><th class="num">Falta</th><th>Estado</th></tr></thead>
     <tbody>${d.cuotas.map(c=>`<tr><td>${c.n}</td><td>${fmtF(c.vence)}</td><td class="num">${money(c.monto)}</td><td class="num">${money(c.abona)}</td><td class="num">${money(c.falta)}</td><td>${pe[c.estado]}${c.estado==='vencida'?' ('+c.dias+' d)':''}</td></tr>`).join('')}</tbody>
   </table>
   <script>window.onload=function(){window.print();};<\/script>
@@ -1130,22 +1171,23 @@ function verPrestamo(id) {
   const pe = {pagada: ['ok', 'Pagada'], vencida: ['bad', 'Vencida'], parcial: ['warn', 'Parcial'], pendiente: ['neu', 'Pendiente']};
   abrir(`<h2>${esc(cli.nombre || 'Sin cliente')} <span class="pill ${e.cls}">${e.txt}</span></h2>
   <div class="grid kpis" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-bottom:12px">
-    <div class="kpi"><div class="l">Capital</div><div class="v" style="font-size:17px">${money(p.capital)}</div></div>
-    <div class="kpi"><div class="l">Interés ${p.tasa}%</div><div class="v" style="font-size:17px">${money(d.interes)}</div></div>
-    <div class="kpi"><div class="l">Total</div><div class="v" style="font-size:17px">${money(d.total)}</div></div>
-    <div class="kpi"><div class="l">Cuota</div><div class="v" style="font-size:17px">${money(d.vc)}</div></div>
+    <div class="kpi"><div class="l">${d.abierto ? 'Capital pendiente' : 'Capital'}</div><div class="v" style="font-size:17px">${money(d.abierto ? d.capitalPend : p.capital)}</div></div>
+    <div class="kpi"><div class="l">${d.abierto ? `Interés ${p.tasa}% ${FREQ_N[p.freq]} (acumulado)` : `Interés ${p.tasa}%`}</div><div class="v" style="font-size:17px">${money(d.interes)}</div></div>
+    <div class="kpi"><div class="l">${d.abierto ? 'Capital abonado' : 'Total'}</div><div class="v" style="font-size:17px">${money(d.abierto ? d.capitalPagado : d.total)}</div></div>
+    <div class="kpi"><div class="l">${d.abierto ? 'Interés del período' : 'Cuota'}</div><div class="v" style="font-size:17px">${money(d.vc)}</div></div>
     <div class="kpi ok"><div class="l">Pagado</div><div class="v" style="font-size:17px">${money(d.pagado)}</div></div>
     <div class="kpi ${d.vencido > 0 ? 'bad' : ''}"><div class="l">Pendiente</div><div class="v" style="font-size:17px">${money(d.saldo)}</div></div></div>
   ${d.mora > 0 ? `<p class="small">Mora por atraso (${p.mora}% de la cuota por día): generada <b class="num">${money(d.mora)}</b> · cobrada <b class="num">${money(d.moraCobrada)}</b> · pendiente <b class="num">${money(d.moraPend)}</b>. No se suma al saldo del préstamo.</p>` : ''}
-  <h3 style="margin:16px 0 6px;font-size:15px">Tabla de amortización (completa)</h3>
-  <div class="scroll"><table><thead><tr><th>#</th><th>Vence</th><th>Cuota</th><th>Abonado</th><th>Falta</th><th>Estado</th></tr></thead><tbody>
+  <h3 style="margin:16px 0 6px;font-size:15px">${d.abierto ? 'Intereses por período (sobre el saldo de capital)' : 'Tabla de amortización (completa)'}</h3>
+  ${d.abierto ? `<p class="small muted">Préstamo abierto: se paga el interés de cada período. Lo que se pague de más abona a capital y baja el próximo interés.</p>` : ''}
+  <div class="scroll"><table><thead><tr><th>#</th><th>Vence</th><th>${d.abierto ? 'Interés' : 'Cuota'}</th><th>Abonado</th><th>Falta</th><th>Estado</th></tr></thead><tbody>
   ${d.cuotas.map(c => `<tr><td class="num">${c.n}</td><td>${fmtF(c.vence)}</td><td class="num">${money(c.monto)}</td><td class="num">${money(c.abona)}</td><td class="num">${money(c.falta)}</td>
     <td><span class="pill ${pe[c.estado][0]}">${pe[c.estado][1]}${c.estado === 'vencida' ? ' · ' + c.dias + ' d' : ''}</span></td></tr>`).join('')}</tbody></table></div>
   <div class="tools" style="margin-top:10px">
     <button class="btn sm" data-act="imprimir-tabla-prestamo" data-id="${id}">Imprimir tabla / PDF</button>
   </div>
   <h3 style="margin:16px 0 6px;font-size:15px">Pagos recibidos</h3>
-  ${pagos.length ? pagos.map(x => `<div class="row" style="padding-inline:0"><div class="main"><div class="t">${fmtF(x.fecha)} · ${x.tipo === 'mora' ? 'Mora' : 'Cuota'}</div><div class="s">${esc(x.nota || '')}</div></div><div class="amt">${money(x.monto)}</div><button class="btn sm" data-act="recibo-pago" data-id="${x.id}">Recibo</button></div>`).join('') : '<p class="small muted">Todavía no hay pagos.</p>'}
+  ${pagos.length ? pagos.map(x => { const a = d.abierto && x.tipo === 'prestamo' ? d.asig[x.id] : null; return `<div class="row" style="padding-inline:0"><div class="main"><div class="t">${fmtF(x.fecha)} · ${x.tipo === 'mora' ? 'Mora' : a ? 'Interés' + (a.capital > 0 ? ' + capital' : '') : 'Cuota'}</div><div class="s">${a ? `Interés ${money(a.interes)} · Capital ${money(a.capital)}` + (x.nota ? ' · ' : '') : ''}${esc(x.nota || '')}</div></div><div class="amt">${money(x.monto)}</div><button class="btn sm" data-act="recibo-pago" data-id="${x.id}">Recibo</button></div>`; }).join('') : '<p class="small muted">Todavía no hay pagos.</p>'}
   ${p.nota ? `<p class="small muted">Nota: ${esc(p.nota)}</p>` : ''}
   <div class="foot"><button class="btn" data-act="ver-prestamo-cliente" data-id="${id}">Vista para cliente</button><button class="btn danger" data-act="del-prestamo" data-id="${id}">Eliminar</button><button class="btn" data-act="recibo-prestamo" data-id="${id}">Recibo del préstamo</button><button class="btn" data-act="cerrar">Cerrar</button>
     ${d.saldado && d.moraPend <= 0 ? '' : `<button class="btn pri" data-act="cobrar" data-kind="prestamo" data-id="${id}">Registrar pago</button>`}</div>`);
@@ -1172,7 +1214,7 @@ function verCliente(id) {
     <div class="kpi"><div class="l">Ventas a crédito</div><div class="v" style="font-size:17px">${money(d.ventas)}</div></div>
     <div class="kpi ${d.total > 0 ? 'bad' : 'ok'}"><div class="l">Debe en total</div><div class="v" style="font-size:17px">${money(d.total)}</div></div></div>
   <h3 style="margin:16px 0 6px;font-size:15px">Préstamos</h3>
-  <div class="panel">${prs.length ? prs.map(p => { const e = estadoPrestamo(p); return `<div class="row click" data-act="ver-prestamo" data-id="${p.id}"><div class="main"><div class="t">${money(p.capital)} <span class="pill ${e.cls}">${e.txt}</span></div><div class="s">${p.cuotas} cuotas ${FREQ_P[p.freq]} desde ${fmtC(p.inicio)}</div></div><div class="amt">${money(detalle(p).saldo)}</div></div>`; }).join('') : '<div class="empty small">Sin préstamos</div>'}</div>
+  <div class="panel">${prs.length ? prs.map(p => { const e = estadoPrestamo(p); return `<div class="row click" data-act="ver-prestamo" data-id="${p.id}"><div class="main"><div class="t">${money(p.capital)} <span class="pill ${e.cls}">${e.txt}</span></div><div class="s">${esc2(p)} desde ${fmtC(p.inicio)}</div></div><div class="amt">${money(detalle(p).saldo)}</div></div>`; }).join('') : '<div class="empty small">Sin préstamos</div>'}</div>
   <h3 style="margin:16px 0 6px;font-size:15px">Ventas a crédito pendientes</h3>
   <div class="panel">${vts.length ? vts.map(v => `<div class="row"><div class="main"><div class="t">${fmtF(v.fecha)}</div><div class="s">${v.items.map(i => i.cant + ' ' + esc(i.nombre)).join(', ')}</div></div><div class="amt">${money(ventaSaldo(v))}</div></div>`).join('') : '<div class="empty small">Sin ventas pendientes</div>'}</div>
   <div class="foot"><button class="btn danger" data-act="del-cliente" data-id="${id}">Eliminar</button><button class="btn" data-act="edit-cliente" data-id="${id}">Editar</button>
@@ -1256,9 +1298,10 @@ function formPrestamo(cli) {
   abrir(`<h2>Nuevo préstamo</h2><div class="f" data-live="prestamo">
     ${sel('cli', 'Cliente', optsCli('Elige un cliente').slice(1), cli || S.clientes[0].id, 'full')}
     ${S.tipos.length ? sel('tipo', 'Tipo de préstamo (llena los datos solo)', [['', 'Personalizado'], ...S.tipos.map(t => [t.id, `${t.nombre} · ${t.tasa}% ${t.base === 'mensual' ? 'mensual' : 'total'} · ${t.cuotas} cuotas ${FREQ_P[t.freq]}`])], '', 'full') : ''}
+    ${sel('modo', 'Modalidad', [['cuotas', 'Con cuotas fijas'], ['abierto', 'Abierto: solo paga el interés']], 'cuotas', 'full')}
     ${fld('capital', 'Monto prestado (RD$)', '', 'number', 'placeholder="10000"')}${fld('tasa', 'Porcentaje de interés', '', 'number', 'placeholder="20"')}
-    ${sel('base', 'El porcentaje se aplica', [['total', 'Una sola vez, sobre todo el préstamo'], ['mensual', 'Cada mes de duración']], 'total', 'full')}
-    ${fld('cuotas', 'Número de cuotas', '4', 'number', 'min="1" step="1"')}${sel('freq', 'Pagos', [['diario', 'Diarios'], ['semanal', 'Semanales'], ['quincenal', 'Quincenales'], ['mensual', 'Mensuales']], 'semanal')}
+    <div class="full" id="g-base">${sel('base', 'El porcentaje se aplica', [['total', 'Una sola vez, sobre todo el préstamo'], ['mensual', 'Cada mes de duración']], 'total', 'full')}</div>
+    <div id="g-cuotas">${fld('cuotas', 'Número de cuotas', '4', 'number', 'min="1" step="1"')}</div>${sel('freq', 'Pagos', [['diario', 'Diarios'], ['semanal', 'Semanales'], ['quincenal', 'Quincenales'], ['mensual', 'Mensuales']], 'semanal')}
     ${fld('inicio', 'Fecha del préstamo', hoy(), 'date')}${fld('mora', 'Cargo por atraso (% de la cuota por día)', '0', 'number', 'title="Déjalo en 0 si no cobras mora"')}
     <div class="full"><label for="f-cond">Condiciones (salen en el comprobante)</label><textarea id="f-cond" rows="2" placeholder="Se llenan solas si eliges un tipo; puedes cambiarlas para este préstamo"></textarea></div>
     ${fld('nota', 'Nota interna (no sale en el comprobante)', '', 'text', '', 'full')}
@@ -1266,11 +1309,22 @@ function formPrestamo(cli) {
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-prestamo">Crear préstamo</button></div>`);
 }
 function leerPrestamo() {
-  return {capital: num(v$('capital')), tasa: num(v$('tasa')), base: v$('base'), cuotas: Math.max(1, Math.round(num(v$('cuotas')))), freq: v$('freq'), inicio: v$('inicio') || hoy(), mora: num(v$('mora'))};
+  const abierto = v$('modo') === 'abierto';
+  const p = {capital: num(v$('capital')), tasa: num(v$('tasa')), base: abierto ? 'total' : v$('base'), cuotas: abierto ? 0 : Math.max(1, Math.round(num(v$('cuotas')))), freq: v$('freq'), inicio: v$('inicio') || hoy(), mora: num(v$('mora'))};
+  if (abierto) p.modo = 'abierto';
+  return p;
+}
+/* En el modo abierto no hay número de cuotas ni base: el interés es % del saldo en cada período */
+function ajustarModo() {
+  const ab = v$('modo') === 'abierto';
+  ['g-base', 'g-cuotas'].forEach(i => { const e = document.getElementById(i); if (e) e.hidden = ab; });
+  const l = document.querySelector('label[for="f-tasa"]'); if (l) l.textContent = ab ? 'Porcentaje de interés por período' : 'Porcentaje de interés';
+  const l2 = document.querySelector('label[for="f-freq"]'); if (l2) l2.textContent = ab ? 'Cobrar el interés' : 'Pagos';
 }
 function previewPrestamo() {
   const p = leerPrestamo(), e = $('#prev'); if (!e) return;
   if (!p.capital) { e.textContent = 'Completa el monto y el porcentaje para ver la cuota.'; return; }
+  if (esAbierto(p)) { e.innerHTML = `Interés por período: <b class="num">${money(r2(p.capital * p.tasa / 100))}</b> (sobre el saldo, ${FREQ_N[p.freq]}) · primer cobro el ${fmtF(fechaCuota(p, 1))}<br>El capital no se mueve hasta que el cliente abone; lo que pague de más del interés baja el saldo.`; return; }
   e.innerHTML = `Interés <b class="num">${money(interesTotal(p))}</b> · Total a pagar <b class="num">${money(totalPrestamo(p))}</b><br>
     ${p.cuotas} cuotas de <b class="num">${money(valorCuota(p))}</b> · primera el ${fmtF(fechaCuota(p, 1))} · última el ${fmtF(fechaCuota(p, p.cuotas))}`;
 }
@@ -1290,6 +1344,7 @@ function cobroInfo(kind, id, concepto) {
   if (kind === 'prestamo') {
     const p = S.prestamos.find(x => x.id === id), d = detalle(p);
     if (concepto === 'mora') return {saldo: d.moraPend, sug: d.moraPend, cli: p.clienteId, tit: 'Mora por atraso', tipo: 'mora'};
+    if (d.abierto) return {saldo: d.saldo, sug: d.vencido > 0 ? d.vencido : d.proxima ? d.proxima.falta : 0, cli: p.clienteId, tit: d.proxima ? `Interés del período ${d.proxima.n}` : 'Abono a capital', tipo: 'prestamo', abierto: true};
     return {saldo: d.saldo, sug: d.vencido > 0 ? d.vencido : d.proxima ? d.proxima.falta : d.saldo, cli: p.clienteId, tit: `Cuota ${d.proxima ? d.proxima.n : ''} de ${p.cuotas}`, tipo: 'prestamo'};
   }
   const v = S.ventas.find(x => x.id === id), s = ventaSaldo(v);
@@ -1301,8 +1356,18 @@ function formCobro(kind, id) {
   const r = cobroInfo(kind, id, concepto);
   const optConcepto = kind === 'prestamo' && conMora && concepto === 'cuota' ? sel('concepto', 'Este pago es de', [['cuota', 'Cuotas del préstamo'], ['mora', 'Mora por atraso']], 'cuota', 'full') : `<input type="hidden" id="f-concepto" value="${concepto}">`;
   abrir(`<h2>Registrar pago</h2><p style="margin:0 0 12px"><b>${esc(nombreCli(r.cli))}</b><br><span class="muted small" id="cobro-tit">${r.tit} · pendiente ${money(r.saldo)}</span></p><div class="f" data-live="cobro" data-kind="${kind}" data-id="${id}">
-    ${optConcepto}${fld('monto', 'Monto recibido (RD$)', String(Math.round(r.sug * 100) / 100), 'number')}${fld('fecha', 'Fecha', hoy(), 'date')}${fld('nota', 'Nota (efectivo, transferencia…)', '', 'text', '', 'full')}</div>
+    ${optConcepto}${fld('monto', 'Monto recibido (RD$)', String(Math.round(r.sug * 100) / 100), 'number')}${fld('fecha', 'Fecha', hoy(), 'date')}${fld('nota', 'Nota (efectivo, transferencia…)', '', 'text', '', 'full')}
+    ${r.abierto ? '<div class="full preview" id="prev-cobro"></div>' : ''}</div>
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-cobro" data-kind="${kind}" data-id="${id}">Guardar pago</button></div>`);
+  previewCobro();
+}
+/* Préstamo abierto: muestra cómo se reparte el pago entre interés y capital antes de guardarlo */
+function previewCobro() {
+  const live = document.querySelector('[data-live="cobro"]'), e = $('#prev-cobro'); if (!live || !e) return;
+  const p = S.prestamos.find(x => x.id === live.dataset.id); if (!p || !esAbierto(p) || v$('concepto') === 'mora') { e.hidden = true; return; }
+  e.hidden = false;
+  const d = detalle(p), m = num(v$('monto')), i = Math.min(m, d.interesPend), c = Math.min(Math.max(0, m - i), d.capitalPend), quedan = r2(d.capitalPend - c);
+  e.innerHTML = `Interés <b class="num">${money(i)}</b> · Abono a capital <b class="num">${money(c)}</b><br>Capital quedará en <b class="num">${money(quedan)}</b> · próximo interés <b class="num">${money(r2(quedan * p.tasa / 100))}</b>`;
 }
 async function saveCobro(kind, id) {
   const r = cobroInfo(kind, id, v$('concepto') || 'cuota'), m = num(v$('monto'));
@@ -1660,18 +1725,25 @@ function reciboPrestamo(id) {
   const d = detalle(p), cli = cliente(p.clienteId) || {};
   const lineas = [];
   if (p.tipoNombre) lineas.push(['Tipo', p.tipoNombre]);
-  lineas.push(['Monto prestado', money(p.capital)], [`Interés ${p.tasa}% ${p.base === 'mensual' ? 'por mes' : 'total'}`, money(d.interes)],
+  if (d.abierto) lineas.push(['Monto prestado', money(p.capital)], [`Interés ${p.tasa}% ${FREQ_N[p.freq]} sobre el saldo`, 'por período'],
+    ['Forma de pago', `Préstamo abierto: se paga el interés ${FREQ_N[p.freq]}; el capital se abona cuando el cliente quiera`]);
+  else lineas.push(['Monto prestado', money(p.capital)], [`Interés ${p.tasa}% ${p.base === 'mensual' ? 'por mes' : 'total'}`, money(d.interes)],
     ['Forma de pago', `${p.cuotas} cuotas ${FREQ_P[p.freq]} de ${money(d.vc)}`]);
   if (p.ventaId) { const vo = S.ventas.find(x => x.id === p.ventaId); if (vo) lineas.unshift(['Origen', 'Financiamiento de venta del ' + fmtF(vo.fecha)]); }
   if (p.mora > 0) lineas.push(['Cargo por atraso', `${p.mora}% de la cuota por día`]);
   mostrarRecibo({titulo: recCfg('prestamo').titulo, texto: [recCfg('prestamo').texto, p.condiciones].filter(Boolean).join('\n\n'), no: 'PR-' + corto(p.id), fecha: p.inicio, cliente: cli.nombre || 'Sin cliente',
-    itemsTit: 'Calendario de pagos', items: d.cuotas.map(c => [`Cuota ${c.n} · ${fmtF(c.vence)}`, money(c.monto)]), lineas, total: ['TOTAL A PAGAR', money(d.total)], firma: true}, cli.tel);
+    itemsTit: d.abierto ? '' : 'Calendario de pagos', items: d.abierto ? [] : d.cuotas.map(c => [`Cuota ${c.n} · ${fmtF(c.vence)}`, money(c.monto)]), lineas, total: d.abierto ? ['CAPITAL PRESTADO', money(p.capital)] : ['TOTAL A PAGAR', money(d.total)], firma: true}, cli.tel);
 }
 function reciboPago(id) {
   const x = S.pagos.find(y => y.id === id); if (!x) return;
   const cli = cliente(x.clienteId) || {}, antes = y => (y.creado || 0) <= (x.creado || 0);
   let lineas = [], rc = recCfg('cuota');
-  if (x.tipo === 'prestamo') {
+  if (x.tipo === 'prestamo' && esAbierto(S.prestamos.find(y => y.id === x.refId) || {})) {
+    const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p), a = d.asig[x.id] || {interes: x.monto, capital: 0};
+    const capAl = p.capital - S.pagos.filter(y => y.tipo === 'prestamo' && y.refId === p.id && antes(y)).reduce((t, y) => t + ((d.asig[y.id] || {}).capital || 0), 0);
+    lineas = [['Concepto', 'Pago de préstamo abierto'], ['Interés pagado', money(a.interes)], ['Abono a capital', money(a.capital)], ['Capital pendiente', money(Math.max(0, capAl))]];
+    if (x.nota) lineas.push(['Nota', x.nota]);
+  } else if (x.tipo === 'prestamo') {
     const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p);
     const pagadoAl = S.pagos.filter(y => y.tipo === 'prestamo' && y.refId === p.id && antes(y)).reduce((a, y) => a + y.monto, 0);
     const hechas = Math.min(p.cuotas, Math.floor((pagadoAl + TOL) / d.vc));
@@ -1731,7 +1803,7 @@ function vReportes() {
   const abonos = pg.filter(x => x.tipo === 'venta').reduce((a, x) => a + x.monto, 0);
   const cuotas = pg.filter(x => x.tipo === 'prestamo').reduce((a, x) => a + x.monto, 0);
   const moraCob = pg.filter(x => x.tipo === 'mora').reduce((a, x) => a + x.monto, 0);
-  const interesCob = pg.filter(x => x.tipo === 'prestamo').reduce((a, x) => { const p = S.prestamos.find(y => y.id === x.refId); if (!p) return a; const t = totalPrestamo(p); return a + (t > 0 ? x.monto * interesTotal(p) / t : 0); }, 0);
+  const interesCob = pg.filter(x => x.tipo === 'prestamo').reduce((a, x) => { const p = S.prestamos.find(y => y.id === x.refId); if (!p) return a; if (esAbierto(p)) return a + ((detalle(p).asig[x.id] || {}).interes || 0); const t = totalPrestamo(p); return a + (t > 0 ? x.monto * interesTotal(p) / t : 0); }, 0);
   const prs = S.prestamos.filter(p => en(p.inicio) && !p.ventaId), prestado = prs.reduce((a, p) => a + p.capital, 0);
   const gs = S.gastos.filter(g => en(g.fecha)), gastos = gs.reduce((a, g) => a + g.monto, 0);
   const compras = gs.filter(g => g.cat === 'Compra de mercancía').reduce((a, g) => a + g.monto, 0);
@@ -1797,7 +1869,7 @@ function hojasRespaldo() {
   const clientes = [['Nombre', 'Teléfono', 'Cédula', 'Dirección', 'Debe en préstamos', 'Debe en ventas', 'Debe en total'],
     ...S.clientes.map(c => { const d = deudaCliente(c.id); return [c.nombre, c.tel || '', c.doc || '', c.dir || '', M(d.prestamos), M(d.ventas), M(d.total)]; })];
   const prestamos = [['Cliente', 'Tipo', 'Fecha', 'Capital', 'Interés %', 'Se aplica', 'Cuotas', 'Pagos', 'Valor cuota', 'Interés RD$', 'Total', 'Pagado', 'Saldo', 'Días de atraso', 'Mora generada', 'Mora cobrada', 'Mora pendiente', 'Estado'],
-    ...S.prestamos.map(p => { const d = detalle(p); return [nombreCli(p.clienteId), p.tipoNombre || '', p.inicio, M(p.capital), p.tasa, p.base === 'mensual' ? 'Cada mes' : 'Una vez', p.cuotas, FREQ_N[p.freq], M(d.vc), M(d.interes), M(d.total), M(d.pagado), M(d.saldo), d.atrasoMax, M(d.mora), M(d.moraCobrada), M(d.moraPend), estadoPrestamo(p).txt]; })];
+    ...S.prestamos.map(p => { const d = detalle(p); return [nombreCli(p.clienteId), p.tipoNombre || '', p.inicio, M(p.capital), p.tasa, esAbierto(p) ? 'Sobre el saldo' : p.base === 'mensual' ? 'Cada mes' : 'Una vez', esAbierto(p) ? 'Abierto' : p.cuotas, FREQ_N[p.freq], M(d.vc), M(d.interes), M(d.total), M(d.pagado), M(d.saldo), d.atrasoMax, M(d.mora), M(d.moraCobrada), M(d.moraPend), estadoPrestamo(p).txt]; })];
   const pagos = [['Fecha', 'Cliente', 'Concepto', 'Monto', 'Nota'], ...[...S.pagos].sort((a, b) => a.fecha < b.fecha ? -1 : 1).map(x => [x.fecha, nombreCli(x.clienteId), TIPO_PAGO[x.tipo] || x.tipo, M(x.monto), x.nota || ''])];
   const ventas = [['Fecha', 'Cliente', 'Productos', 'Total', 'Cobrado al vender', 'Abonos', 'Saldo', 'Fecha de pago', 'Financiado en préstamo'],
     ...[...S.ventas].sort((a, b) => a.fecha < b.fecha ? -1 : 1).map(v => [v.fecha, nombreCli(v.clienteId), v.items.map(i => `${i.cant} ${i.nombre}`).join(', '), M(v.total), M(v.pagado0), M(ventaPagado(v) - v.pagado0), M(ventaSaldo(v)), v.vence || '', M(v.financiado || 0)])];
@@ -2172,15 +2244,16 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => {
   if (e.target.id === 'q') { UI.q = e.target.value; pintar(); return; }
   const live = e.target.closest('[data-live]'); if (!live) return;
-  if (live.dataset.live === 'prestamo') previewPrestamo(); else if (live.dataset.live === 'venta') previewVenta();
+  if (live.dataset.live === 'prestamo') previewPrestamo(); else if (live.dataset.live === 'venta') previewVenta(); else if (live.dataset.live === 'cobro') previewCobro();
 });
 const setV = (id, v) => { const e = document.getElementById('f-' + id); if (e) e.value = v; };
 document.addEventListener('change', e => {
   const id = e.target.id;
   if (id === 'r-d' || id === 'r-h') { if (e.target.value) { if (id === 'r-d') UI.desde = e.target.value; else UI.hasta = e.target.value; pintar(); } return; }
   if (id === 'f-restore') { if (e.target.files[0]) restaurar(e.target.files[0]); return; }
+  if (id === 'f-modo') { ajustarModo(); previewPrestamo(); return; }
   if (id === 'f-tipo') { const t = S.tipos.find(x => x.id === e.target.value); if (t) { setV('tasa', t.tasa); setV('base', t.base); setV('cuotas', t.cuotas); setV('freq', t.freq); setV('mora', t.mora || 0); setV('cond', t.cond || ''); } previewPrestamo(); return; }
-  if (id === 'f-concepto') { const live = e.target.closest('[data-live]'); if (live) { const r = cobroInfo(live.dataset.kind, live.dataset.id, e.target.value); setV('monto', Math.round(r.sug * 100) / 100); const t = $('#cobro-tit'); if (t) t.textContent = `${r.tit} · pendiente ${money(r.saldo)}`; } return; }
+  if (id === 'f-concepto') { const live = e.target.closest('[data-live]'); if (live) { const r = cobroInfo(live.dataset.kind, live.dataset.id, e.target.value); setV('monto', Math.round(r.sug * 100) / 100); const t = $('#cobro-tit'); if (t) t.textContent = `${r.tit} · pendiente ${money(r.saldo)}`; previewCobro(); } return; }
   if (e.target.classList.contains('vp')) { const p = producto(e.target.value), l = e.target.closest('.vl'), r = l.querySelector('.vpr'); r.placeholder = p ? p.precio : ''; r.value = ''; l.querySelector('.vg').value = p ? (p.garantia || cfg().garantia || '') : ''; }
   const live = e.target.closest('[data-live]'); if (live && live.dataset.live === 'venta') previewVenta();
 });
