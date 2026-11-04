@@ -863,6 +863,19 @@ const nombreCli = id => (cliente(id) || {nombre: 'Cliente general'}).nombre;
 const producto = id => S.productos.find(p => p.id === id);
 const ventaPagado = v => v.pagado0 + S.pagos.filter(x => x.tipo === 'venta' && x.refId === v.id).reduce((a, x) => a + x.monto, 0);
 const ventaSaldo = v => Math.max(0, Math.round((v.total - ventaPagado(v) - (v.financiado || 0)) * 100) / 100);
+/* Mora de una venta a crédito (opcional, v.mora = % del saldo por día desde la fecha de pago).
+   Se calcula por tramos: cada abono tardío deja mora por los días que el saldo estuvo sin pagar; lo que sigue pendiente sigue creciendo.
+   Se cobra aparte (pagos tipo 'mora' con refId de la venta) y no se suma al saldo. */
+function moraVenta(v) {
+  const cob = r2(S.pagos.filter(x => x.tipo === 'mora' && x.refId === v.id).reduce((a, x) => a + x.monto, 0)), tasa = (v.mora || 0) / 100;
+  if (!(tasa > 0) || !v.vence) return {mora: 0, moraCobrada: cob, moraPend: 0};
+  const pg = S.pagos.filter(x => x.tipo === 'venta' && x.refId === v.id).sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.creado || 0) - (b.creado || 0));
+  let bal = v.total - v.pagado0 - (v.financiado || 0), cur = v.vence, mora = 0;
+  pg.forEach(x => { if (bal <= 0.005) return; if (x.fecha > cur) { mora += bal * tasa * diffDias(x.fecha, cur); cur = x.fecha; } bal -= x.monto; });
+  if (bal > 0.005) mora += bal * tasa * Math.max(0, diffDias(hoy(), cur));
+  mora = r2(mora);
+  return {mora, moraCobrada: cob, moraPend: Math.max(0, r2(mora - cob))};
+}
 function deudaCliente(id) {
   const pr = S.prestamos.filter(p => p.clienteId === id).reduce((a, p) => a + detalle(p).saldo, 0);
   const vt = S.ventas.filter(v => v.clienteId === id).reduce((a, v) => a + ventaSaldo(v), 0);
@@ -890,7 +903,7 @@ function pintar() {
   if (fid) { const e = document.getElementById(fid); if (e && e.tagName === 'INPUT') { e.focus(); try { e.setSelectionRange(pos, pos); } catch (x) {} } }
 }
 
-const TIPO_PAGO = {prestamo: 'Cuota de préstamo', mora: 'Mora de préstamo', venta: 'Abono a venta a crédito'};
+const TIPO_PAGO = {prestamo: 'Cuota de préstamo', mora: 'Mora por atraso', venta: 'Abono a venta a crédito'};
 const vacio = (t, s, btn = '') => `<div class="empty"><b>${t}</b>${s}${btn ? `<div style="margin-top:12px">${btn}</div>` : ''}</div>`;
 const telWa = t => { let d = String(t || '').replace(/\D/g, ''); if (d.length === 10) d = '1' + d; return d; };
 function wa(nombre, tel, texto) {
@@ -898,6 +911,7 @@ function wa(nombre, tel, texto) {
   return n ? `<a class="btn sm" target="_blank" rel="noopener" href="https://wa.me/${n}?text=${encodeURIComponent(texto)}">WhatsApp</a>` : '';
 }
 function msgCobro(c) {
+  if (c.soloMora) return `Hola ${c.nombre}, te recordamos que tienes pendiente un cargo por atraso de ${money(c.monto)}. Gracias por tu atención.`;
   const cuando = c.dias > 0 ? `con ${c.dias} ${c.dias === 1 ? 'día' : 'días'} de atraso` : `con vencimiento el ${fmtF(c.vence)}`;
   return `Hola ${c.nombre}, te recordamos tu pago de ${money(c.monto)} ${cuando}. Gracias por tu atención.`;
 }
@@ -920,9 +934,10 @@ function agendaCobros() {
         : `Préstamo ${FREQ_N[p.freq]} · cuota ${d.proxima.n} de ${p.cuotas}` + (venc > 1 ? ` · ${venc} cuotas atrasadas` : '')});
   });
   S.ventas.forEach(v => {
-    const s = ventaSaldo(v); if (s <= 0) return;
+    const s = ventaSaldo(v), mv = moraVenta(v); if (s <= 0 && mv.moraPend <= 0) return;
     const cli = cliente(v.clienteId) || {};
-    out.push({kind: 'venta', id: v.id, cid: v.clienteId, nombre: cli.nombre || 'Cliente general', tel: cli.tel, vence: v.vence || '', dias: v.vence ? Math.max(0, diffDias(hoy(), v.vence)) : 0, monto: s, mora: 0,
+    if (s <= 0) { out.push({kind: 'venta', id: v.id, nombre: cli.nombre || 'Cliente general', tel: cli.tel, vence: '', dias: 0, monto: mv.moraPend, mora: mv.moraPend, soloMora: true, det: `Venta a crédito del ${fmtC(v.fecha)} · solo queda la mora`}); return; }
+    out.push({kind: 'venta', id: v.id, cid: v.clienteId, nombre: cli.nombre || 'Cliente general', tel: cli.tel, vence: v.vence || '', dias: v.vence ? Math.max(0, diffDias(hoy(), v.vence)) : 0, monto: s, mora: mv.moraPend,
       det: `Venta a crédito del ${fmtC(v.fecha)}`});
   });
   return out.sort((a, b) => (a.vence || '9999') < (b.vence || '9999') ? -1 : 1);
@@ -938,7 +953,7 @@ function rowCobro(c) {
   return `<div class="row"><div class="main"><div class="t">${esc(c.nombre)} ${pillCobro(c)}</div>
     <div class="s">${esc(c.det)}${c.vence ? ' · ' + fmtF(c.vence) : ''}${c.mora > 0 ? ' · mora estimada ' + money(c.mora) : ''}</div></div>
     <div class="amt">${money(c.monto)}</div>
-    <div class="acts">${wa(c.nombre, c.tel, msgCobro(c))}<button class="btn sm pri" data-act="cobrar" data-kind="${c.kind}" data-id="${c.id}">Cobrar</button>${c.kind === 'venta' && c.cid ? `<button class="btn sm" data-act="financiar" data-id="${c.id}">Financiar</button>` : ''}</div></div>`;
+    <div class="acts">${wa(c.nombre, c.tel, msgCobro(c))}<button class="btn sm pri" data-act="cobrar" data-kind="${c.kind}" data-id="${c.id}">Cobrar</button>${c.kind === 'venta' && c.cid && !c.soloMora ? `<button class="btn sm" data-act="financiar" data-id="${c.id}">Financiar</button>` : ''}</div></div>`;
 }
 
 /* ----- Inicio ----- */
@@ -1313,11 +1328,11 @@ function vVentas() {
   }
   const L = S.ventas.filter(v => coincide(nombreCli(v.clienteId) + ' ' + v.items.map(i => i.nombre).join(' '))).sort((a, b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : (a.creado < b.creado ? 1 : -1));
   return kp + `<div class="tools">${buscaBox('Buscar venta o cliente')}${seg}<button class="btn pri" data-act="nueva-venta">Nueva venta</button></div>
-  <div class="panel">${L.length ? L.slice(0, 80).map(v => { const s = ventaSaldo(v);
-    return `<div class="row"><div class="main"><div class="t">${esc(nombreCli(v.clienteId))} ${s > 0 ? `<span class="pill ${v.vence && diffDias(hoy(), v.vence) > 0 ? 'bad' : 'warn'}">Debe ${money(s)}</span>` : '<span class="pill ok">Pagada</span>'}</div>
+  <div class="panel">${L.length ? L.slice(0, 80).map(v => { const s = ventaSaldo(v), mv = moraVenta(v);
+    return `<div class="row"><div class="main"><div class="t">${esc(nombreCli(v.clienteId))} ${s > 0 ? `<span class="pill ${v.vence && diffDias(hoy(), v.vence) > 0 ? 'bad' : 'warn'}">Debe ${money(s)}</span>` : '<span class="pill ok">Pagada</span>'}${mv.moraPend > 0 ? ` <span class="pill bad">Mora ${money(mv.moraPend)}</span>` : ''}</div>
       <div class="s">${fmtF(v.fecha)} · ${v.items.map(i => i.cant + ' ' + esc(i.nombre)).join(', ')}</div></div>
       <div class="amt">${money(v.total)}</div>
-      <div class="acts">${s > 0 ? `<button class="btn sm pri" data-act="cobrar" data-kind="venta" data-id="${v.id}">Cobrar</button>` : ''}${s > 0 && v.clienteId ? `<button class="btn sm" data-act="financiar" data-id="${v.id}">Financiar</button>` : ''}<button class="btn sm" data-act="recibo-venta" data-id="${v.id}">Recibo</button><button class="btn sm danger" data-act="del-venta" data-id="${v.id}">Anular</button></div></div>`; }).join('')
+      <div class="acts">${s > 0 || mv.moraPend > 0 ? `<button class="btn sm pri" data-act="cobrar" data-kind="venta" data-id="${v.id}">Cobrar</button>` : ''}${s > 0 && v.clienteId ? `<button class="btn sm" data-act="financiar" data-id="${v.id}">Financiar</button>` : ''}<button class="btn sm" data-act="recibo-venta" data-id="${v.id}">Recibo</button><button class="btn sm danger" data-act="del-venta" data-id="${v.id}">Anular</button></div></div>`; }).join('')
     : vacio('Aún no hay ventas', 'Registra una venta y el inventario baja solo. Si el cliente no paga todo, queda como crédito.')}</div>`;
 }
 
@@ -1427,13 +1442,15 @@ function cobroInfo(kind, id, concepto) {
     return {saldo: d.saldo, sug: d.vencido > 0 ? d.vencido : d.proxima ? d.proxima.falta : d.saldo, cli: p.clienteId, tit: `Cuota ${d.proxima ? d.proxima.n : ''} de ${p.cuotas}`, tipo: 'prestamo'};
   }
   const v = S.ventas.find(x => x.id === id), s = ventaSaldo(v);
+  if (concepto === 'mora') { const mv = moraVenta(v); return {saldo: mv.moraPend, sug: mv.moraPend, cli: v.clienteId, tit: 'Mora por atraso', tipo: 'mora'}; }
   return {saldo: s, sug: s, cli: v.clienteId, tit: 'Venta a crédito', tipo: 'venta'};
 }
 function formCobro(kind, id) {
   let concepto = 'cuota', conMora = false;
   if (kind === 'prestamo') { const d = detalle(S.prestamos.find(x => x.id === id)); conMora = d.moraPend > 0; if (d.saldado) concepto = 'mora'; }
+  else { const v0 = S.ventas.find(x => x.id === id); conMora = moraVenta(v0).moraPend > 0; if (ventaSaldo(v0) <= 0) concepto = 'mora'; }
   const r = cobroInfo(kind, id, concepto);
-  const optConcepto = kind === 'prestamo' && conMora && concepto === 'cuota' ? sel('concepto', 'Este pago es de', [['cuota', 'Cuotas del préstamo'], ['mora', 'Mora por atraso']], 'cuota', 'full') : `<input type="hidden" id="f-concepto" value="${concepto}">`;
+  const optConcepto = conMora && concepto === 'cuota' ? sel('concepto', 'Este pago es de', [['cuota', kind === 'venta' ? 'Abono a la venta' : 'Cuotas del préstamo'], ['mora', 'Mora por atraso']], 'cuota', 'full') : `<input type="hidden" id="f-concepto" value="${concepto}">`;
   abrir(`<h2>Registrar pago</h2><p style="margin:0 0 12px"><b>${esc(nombreCli(r.cli))}</b><br><span class="muted small" id="cobro-tit">${r.tit} · pendiente ${money(r.saldo)}</span></p><div class="f" data-live="cobro" data-kind="${kind}" data-id="${id}">
     ${optConcepto}${fld('monto', 'Monto recibido (RD$)', String(Math.round(r.sug * 100) / 100), 'number')}${fld('fecha', 'Fecha', hoy(), 'date')}${fld('nota', 'Nota (efectivo, transferencia…)', '', 'text', '', 'full')}
     ${r.abierto ? '<div class="full preview" id="prev-cobro"></div>' : ''}</div>
@@ -1499,7 +1516,7 @@ function formVenta(cli) {
     <div class="full"><label>Productos, cantidad y precio</label><div id="lineas">${lineaVenta()}</div><button class="btn sm" data-act="mas-linea">Agregar otro producto</button></div>
     <div class="full preview" id="tv">Total: <b class="num">${money(0)}</b></div>
     ${fld('cobrado', 'Cobrado ahora (RD$)', '', 'number', 'placeholder="Todo, si lo dejas vacío"')}${fld('fecha', 'Fecha', hoy(), 'date')}
-    <div class="full" id="vencebox" hidden>${sel('resto', 'Lo que queda sin pagar', [['credito', 'Dejarlo a crédito (sin interés)'], ['financiar', 'Financiarlo en cuotas con interés']], 'credito', 'full')}${fld('vence', 'Si lo dejas a crédito, fecha en que pagará', sumaDias(hoy(), 15), 'date')}</div></div>
+    <div class="full" id="vencebox" hidden>${sel('resto', 'Lo que queda sin pagar', [['credito', 'Dejarlo a crédito (sin interés)'], ['financiar', 'Financiarlo en cuotas con interés']], 'credito', 'full')}${fld('vence', 'Si lo dejas a crédito, fecha en que pagará', sumaDias(hoy(), 15), 'date')}${fld('mora', 'Cargo por atraso (% del saldo por día)', '0', 'number', 'title="Déjalo en 0 si no cobras mora"')}</div></div>
     <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-venta">Registrar venta</button></div>`);
 }
 function leerVenta() {
@@ -1528,7 +1545,7 @@ async function saveVenta() {
   if (pag < total - 0.005 && !cli) return aviso('Para vender a crédito elige un cliente.');
   const financiar = pag < total - 0.005 && v$('resto') === 'financiar';
   const fecha = v$('fecha') || hoy();
-  const venta = {id: uid(), fecha, clienteId: cli, items, total, pagado0: pag, vence: pag < total - 0.005 ? (v$('vence') || sumaDias(fecha, 15)) : '', creado: Date.now()};
+  const venta = {id: uid(), fecha, clienteId: cli, items, total, pagado0: pag, vence: pag < total - 0.005 ? (v$('vence') || sumaDias(fecha, 15)) : '', ...(pag < total - 0.005 && num(v$('mora')) > 0 ? {mora: num(v$('mora'))} : {}), creado: Date.now()};
   await guardar('ventas', venta);
   for (const pid in porProd) { const p = producto(pid); await guardar('productos', {...p, stock: p.stock - porProd[pid]}); }
   cerrar();
@@ -1571,7 +1588,7 @@ async function anularVenta(id) {
   const v = S.ventas.find(x => x.id === id); if (!v) return;
   if (v.prestamoId && S.prestamos.some(x => x.id === v.prestamoId)) return aviso('Esta venta tiene un préstamo ligado. Elimina primero ese préstamo y luego anula la venta.');
   for (const i of v.items) { const p = producto(i.pid); if (p) await guardar('productos', {...p, stock: p.stock + i.cant}); }
-  for (const x of S.pagos.filter(x => x.tipo === 'venta' && x.refId === id)) await borrar('pagos', x.id);
+  for (const x of S.pagos.filter(x => (x.tipo === 'venta' || x.tipo === 'mora') && x.refId === id)) await borrar('pagos', x.id);
   await borrar('ventas', id); aviso('Venta anulada y mercancía devuelta al inventario');
 }
 
@@ -1838,6 +1855,7 @@ function reciboVenta(id) {
   const cli = cliente(v.clienteId) || {}, cred = Math.round((v.total - v.pagado0) * 100) / 100;
   const lineas = [['Cobrado al momento', money(v.pagado0)]];
   if (cred > 0) { lineas.push(['Queda a crédito', money(cred)]); if (v.vence && !v.financiado) lineas.push(['Fecha de pago', fmtF(v.vence)]); }
+  if (v.mora > 0 && cred > 0 && !v.financiado) lineas.push(['Cargo por atraso', `${v.mora}% del saldo por día`]);
   if (v.financiado > 0) lineas.push(['Financiado en préstamo', money(v.financiado)]);
   if (v.garantia) lineas.push(['Garantía', v.garantia]);
   mostrarRecibo({titulo: recCfg('venta').titulo, texto: recCfg('venta').texto, no: 'V-' + corto(v.id), fecha: v.fecha, cliente: cli.nombre || 'Cliente general',
@@ -1874,14 +1892,14 @@ function reciboPago(id) {
     const hechas = Math.min(p.cuotas, Math.floor((pagadoAl + TOL) / d.vc));
     lineas = [['Concepto', 'Pago de cuota'], ['Préstamo', money(p.capital)], ['Cuotas completas pagadas', `${hechas} de ${p.cuotas}`], ['Saldo pendiente', money(Math.max(0, d.total - pagadoAl))], ...lineasMora(d)];
   } else if (x.tipo === 'mora') {
-    const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p);
-    rc = recCfg('mora');
-    lineas = [['Concepto', 'Cargo por atraso'], ['Préstamo', money(p.capital)], ['Mora pendiente hoy', money(d.moraPend)]];
+    const p = S.prestamos.find(y => y.id === x.refId); rc = recCfg('mora');
+    if (p) lineas = [['Concepto', 'Cargo por atraso'], ['Préstamo', money(p.capital)], ['Mora pendiente hoy', money(detalle(p).moraPend)]];
+    else { const v = S.ventas.find(y => y.id === x.refId); lineas = [['Concepto', 'Cargo por atraso'], ['Venta a crédito', v ? `del ${fmtC(v.fecha)} · ${money(v.total)}` : ''], ['Mora pendiente hoy', money(v ? moraVenta(v).moraPend : 0)]]; }
   } else {
     const v = S.ventas.find(y => y.id === x.refId);
     const pagadoAl = v.pagado0 + S.pagos.filter(y => y.tipo === 'venta' && y.refId === v.id && antes(y)).reduce((a, y) => a + y.monto, 0);
     rc = recCfg('abono');
-    lineas = [['Concepto', 'Abono a venta del ' + fmtC(v.fecha)], ['Total de la venta', money(v.total)], ['Saldo pendiente', money(Math.max(0, v.total - pagadoAl))]];
+    lineas = [['Concepto', 'Abono a venta del ' + fmtC(v.fecha)], ['Total de la venta', money(v.total)], ['Saldo pendiente', money(Math.max(0, v.total - pagadoAl))], ...lineasMora(moraVenta(v))];
     if (x.nota) lineas.push(['Nota', x.nota]);
   }
   mostrarRecibo({titulo: rc.titulo, texto: rc.texto, no: 'P-' + corto(x.id), fecha: x.fecha, cliente: cli.nombre || 'Cliente general', lineas, total: ['RECIBIDO', money(x.monto)]}, cli.tel);
@@ -2445,6 +2463,7 @@ const BUILD_MINIMO = '1050';
 const NECESITA_ACT = /^\d+$/.test(APP_BUILD) && /^\d+$/.test(BUILD_MINIMO) && parseInt(APP_BUILD, 10) < parseInt(BUILD_MINIMO, 10);
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
+  {f: '3 de noviembre — noche', t: ['Ventas a crédito: ahora puedes ponerles un cargo por atraso (% del saldo por día). Si el cliente no paga en la fecha acordada, empieza a generarse mora', 'La mora de una venta sale en la lista de cobros, en la lista de ventas y en los recibos; se cobra aparte del saldo, igual que en los préstamos', 'Si lo dejas en 0 no cobra mora, como antes']},
   {f: '3 de noviembre', t: ['Arreglados los botones "Imprimir / PDF" del préstamo y "Imprimir tabla / PDF": ya funcionan', 'En el celular ahora se comparte un PDF de verdad (antes salía un archivo .html); el recibo tiene botón "Enviar PDF"', 'El estado de cuenta y la tabla del préstamo muestran lo atrasado, la mora generada, cobrada y pendiente, y el total atrasado con mora', 'El recibo de pago de cuota ahora trae la mora generada y la mora pendiente']},
   {f: '2 de noviembre', t: ['Nuevo préstamo y Nueva venta: botón "+ Nuevo cliente" para crear el cliente sin salir; al guardarlo vuelves al formulario con ese cliente ya elegido']},
   {f: '1 de noviembre — noche', t: ['Nuevo préstamo ABIERTO: el cliente paga solo el interés de cada período y el capital no se mueve; el interés se calcula sobre el saldo actual', 'Lo que el cliente pague de más del interés abona a capital y baja el próximo interés (al registrar el pago ves cómo se reparte)', 'Botón Pago total: cobra el capital y el interés del período en curso proporcional a los días, o lo exonera si tú decides', 'Los recibos, reportes y el archivo exportado ya reconocen los préstamos abiertos']},
