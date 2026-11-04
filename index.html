@@ -1092,9 +1092,102 @@ function verPrestamoCliente(id) {
   </div>`);
 }
 
+/* ----- PDF sin librerías: documentos de texto/tablas y recibos como imagen. Lo usa el APK (que no puede imprimir) ----- */
+const pdfEsc = s => String(s == null ? '' : s).replace(/[\\()]/g, '\\$&').replace(/[\r\n]+/g, ' ');
+const pdfL1 = s => { const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); b[i] = c < 256 ? c : 63; } return b; };
+function pdfAncho(s, tam, neg) { let w = 0; for (const c of String(s)) w += /[0-9$]/.test(c) ? .556 : /[ .,:;|!'()\-]/.test(c) ? .278 : /[A-ZMW]/.test(c) ? .68 : .53; return w * tam * (neg ? 1.05 : 1); }
+/* paginas: [{cont: 'operadores PDF', img: {data: Uint8Array JPEG, w, h}}] */
+function pdfArmar(paginas, W, H) {
+  const out = [], pos = {}; let n = 0, sig = 5;
+  const put = x => { const b = typeof x === 'string' ? pdfL1(x) : x; out.push(b); n += b.length; };
+  const obj = (num, dic, flujo) => {
+    pos[num] = n; put(`${num} 0 obj\n`);
+    if (flujo) { put(`<< ${dic} /Length ${flujo.length} >>\nstream\n`); put(flujo); put('\nendstream\nendobj\n'); } else put(`${dic}\nendobj\n`);
+  };
+  put('%PDF-1.4\n');
+  const kids = [];
+  paginas.forEach(pg => {
+    const pn = sig++, cn = sig++, im = pg.img ? sig++ : 0; kids.push(pn + ' 0 R');
+    obj(pn, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >>${im ? ` /XObject << /Im ${im} 0 R >>` : ''} >> /Contents ${cn} 0 R >>`);
+    obj(cn, '', pdfL1(pg.cont));
+    if (im) obj(im, `/Type /XObject /Subtype /Image /Width ${pg.img.w} /Height ${pg.img.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode`, pg.img.data);
+  });
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2, `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${kids.length} >>`);
+  obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+  obj(4, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+  const xr = n; put(`xref\n0 ${sig}\n0000000000 65535 f \n`);
+  for (let i = 1; i < sig; i++) put(String(pos[i]).padStart(10, '0') + ' 00000 n \n');
+  put(`trailer\n<< /Size ${sig} /Root 1 0 R >>\nstartxref\n${xr}\n%%EOF`);
+  return new Blob(out, {type: 'application/pdf'});
+}
+/* Documento: {negocio, titulo, bloques: [{h:'Título'} | {k:'Etiqueta', v:'Valor'} | {t:'Texto', b:true?} | {tabla: {cols: [{t, w?, der?}], filas: [[..]]}}]} */
+function pdfDoc(m) {
+  const W = 595, H = 842, M = 40, pags = []; let ops, y;
+  const nueva = () => { ops = []; pags.push({cont: ''}); pags[pags.length - 1].ops = ops; y = H - M; };
+  const txt = (s, x, yy, tam, neg) => ops.push(`BT /${neg ? 'F2' : 'F1'} ${tam} Tf ${x.toFixed(1)} ${yy.toFixed(1)} Td (${pdfEsc(s)}) Tj ET`);
+  const envolver = (s, tam, ancho, neg) => { const ls = []; let cur = ''; String(s).split(/\s+/).forEach(p => { const t = cur ? cur + ' ' + p : p; if (cur && pdfAncho(t, tam, neg) > ancho) { ls.push(cur); cur = p; } else cur = t; }); if (cur) ls.push(cur); return ls.length ? ls : ['']; };
+  nueva();
+  txt(m.negocio || 'Mi Negocio Al Día', M, y - 14, 16, true); y -= 22;
+  txt(m.titulo, M, y - 10, 12, false); y -= 24;
+  m.bloques.forEach(b => {
+    if (b.h) { if (y - 34 < M) nueva(); y -= 8; txt(b.h, M, y - 11, 12, true); y -= 20; }
+    else if (b.k !== undefined) {
+      const lab = b.k + ': ', wl = pdfAncho(lab, 10), ls = envolver(b.v, 10, W - 2 * M - wl, true);
+      if (y - ls.length * 14 < M) nueva();
+      ls.forEach((l, i) => { if (i === 0) txt(lab, M, y - 10, 10); txt(l, M + (i === 0 ? wl : 0), y - 10, 10, true); y -= 14; });
+    } else if (b.t !== undefined) {
+      const ls = envolver(b.t, 10, W - 2 * M, b.b); if (y - ls.length * 14 < M) nueva();
+      ls.forEach(l => { txt(l, M, y - 10, 10, b.b); y -= 14; });
+    } else if (b.tabla) {
+      const T = b.tabla, ancho = W - 2 * M, fijo = T.cols.reduce((a, c) => a + (c.w || 0), 0), libres = T.cols.filter(c => !c.w).length;
+      const ws = T.cols.map(c => c.w || (ancho - fijo) / libres);
+      const fila = (celdas, cab) => {
+        if (y - 18 < M) { nueva(); if (!cab) fila(T.cols.map(c => c.t), true); }
+        const top = y; let x = M;
+        if (cab) ops.push(`0.93 g ${M} ${top - 16} ${ancho} 16 re f 0 g`);
+        celdas.forEach((c, i) => {
+          let s = String(c == null ? '' : c);
+          if (pdfAncho(s, 9, cab) > ws[i] - 8) { while (s.length > 1 && pdfAncho(s + '...', 9, cab) > ws[i] - 8) s = s.slice(0, -1); s += '...'; }
+          ops.push(`0.75 G ${x.toFixed(1)} ${top - 16} ${ws[i].toFixed(1)} 16 re S`);
+          txt(s, T.cols[i].der ? x + ws[i] - 4 - pdfAncho(s, 9, cab) : x + 4, top - 12, 9, cab);
+          x += ws[i];
+        });
+        y -= 16;
+      };
+      fila(T.cols.map(c => c.t), true); T.filas.forEach(f => fila(f, false)); y -= 8;
+    }
+  });
+  pags.forEach(p => { p.cont = p.ops.join('\n'); });
+  return pdfArmar(pags, W, H);
+}
+function htmlDoc(m) {
+  const cuerpo = m.bloques.map(b => b.h ? `<h2>${esc(b.h)}</h2>` : b.k !== undefined ? `<div>${esc(b.k)}: <b>${esc(b.v)}</b></div>` : b.t !== undefined ? `<div>${b.b ? '<b>' + esc(b.t) + '</b>' : esc(b.t)}</div>`
+    : `<table><thead><tr>${b.tabla.cols.map(c => `<th${c.der ? ' class="num"' : ''}>${esc(c.t)}</th>`).join('')}</tr></thead><tbody>${b.tabla.filas.map(f => '<tr>' + f.map((c, i) => `<td${b.tabla.cols[i].der ? ' class="num"' : ''}>${esc(c)}</td>`).join('') + '</tr>').join('')}</tbody></table>`).join('');
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(m.titulo)}</title>
+  <style>body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#000}h1{font-size:16px;margin:0 0 8px}h2{font-size:14px;margin:12px 0 6px}
+  table{border-collapse:collapse;width:100%;margin-top:6px}th,td{border:1px solid #ccc;padding:4px 6px;text-align:left}th{background:#f5f5f5}.num{text-align:right}</style>
+  </head><body><h1>${esc(m.negocio)} - ${esc(m.titulo)}</h1>${cuerpo}<script>window.onload=function(){window.print();};<\/script></body></html>`;
+}
+/* En el navegador abre la impresión; en el APK genera un PDF real y abre el menú de compartir */
+function emitirDoc(m, nombre) {
+  const base = nombre.replace(/[^a-z0-9áéíóúñ]+/gi, '-').toLowerCase() + '-' + hoy();
+  if (NATIVO()) { guardarNativo(pdfDoc(m), base + '.pdf'); return; }
+  abrirImpresion(htmlDoc(m), nombre);
+}
+/* Líneas de mora para recibos y estados de cuenta (la mora se cobra aparte del saldo) */
+const lineasMora = d => d && d.mora > 0 ? [['Mora generada', money(d.mora)], ['Mora pendiente hoy', money(d.moraPend)]] : [];
+function bloquesMora(p, d) {
+  const b = [];
+  if (p.mora > 0) b.push({k: 'Cargo por atraso', v: `${p.mora}% de la cuota por día`});
+  if (d.vencido > 0) b.push({k: 'Atrasado hoy (sin mora)', v: money(d.vencido)});
+  if (d.mora > 0) b.push({k: 'Mora generada', v: money(d.mora)}, {k: 'Mora cobrada', v: money(d.moraCobrada)}, {k: 'Mora pendiente', v: money(d.moraPend) + ' (aparte del saldo)'});
+  if (d.vencido > 0 || d.moraPend > 0) b.push({k: 'Total atrasado con mora', v: money(r2(d.vencido + d.moraPend))});
+  return b;
+}
 function imprimirPrestamoCliente(id) {
   const p = S.prestamos.find(x => x.id === id); if (!p) return;
-  const d = detalle(p), cli = cliente(p.clienteId) || {}, e = estadoPrestamo(p);
+  const d = detalle(p), cli = cliente(p.clienteId) || {}, e = estadoPrestamo(p), c = cfg();
   const pagos = S.pagos.filter(x => (x.tipo === 'prestamo' || x.tipo === 'mora') && x.refId === id).sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.creado || 0) - (b.creado || 0));
   let proximoTxt = '';
   if (d.saldado && d.moraPend <= 0) {
@@ -1104,36 +1197,14 @@ function imprimirPrestamoCliente(id) {
   } else if (d.moraPend > 0) {
     proximoTxt = `Solo mora pendiente - ${money(d.moraPend)}`;
   }
-  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Préstamo - ${esc(cli.nombre)}</title>
-  <style>
-    body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#000}
-    h1{font-size:16px;margin:0 0 8px}
-    .row{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0}
-    .box{border:1px solid #ccc;padding:6px 10px}
-    table{border-collapse:collapse;width:100%;margin-top:10px}
-    th,td{border:1px solid #ccc;padding:4px 6px;text-align:left}
-    th{background:#f5f5f5}
-    .muted{color:#555}
-  </style>
-  </head><body>
-  <h1>Mi Negocio Al Día - Resumen de préstamo</h1>
-  <div>Cliente: <b>${esc(cli.nombre || 'Sin cliente')}</b> ${cli.tel ? '· Tel: ' + esc(cli.tel) : ''}</div>
-  <div>Estado: <b>${e.txt}</b></div>
-  <div class="row">
-    <div class="box">Monto: <b>${money(p.capital)}</b></div>
-    <div class="box">${d.abierto ? `Interés: <b>${p.tasa}% ${FREQ_N[p.freq]}</b>` : `Cuotas: <b>${p.cuotas} ${FREQ_P[p.freq]}</b>`}</div>
-    <div class="box">${d.abierto ? 'Interés del período' : 'Valor cuota'}: <b>${money(d.vc)}</b></div>
-    <div class="box">${d.abierto ? 'Capital pendiente' : 'Total'}: <b>${money(d.abierto ? d.capitalPend : d.total)}</b></div>
-    <div class="box">Pagado: <b>${money(d.pagado)}</b></div>
-    <div class="box">Saldo pendiente: <b>${money(d.saldo)}</b></div>
-  </div>
-  <div><b>Próximo vencimiento:</b> ${esc(proximoTxt)}</div>
-  ${d.moraPend > 0 ? `<div>Mora pendiente: <b>${money(d.moraPend)}</b> (separada del saldo) · Mora cobrada: ${money(d.moraCobrada)}</div>` : ''}
-  <h2 style="font-size:14px;margin:12px 0 6px">Pagos realizados</h2>
-  ${pagos.length ? '<table><thead><tr><th>Fecha</th><th>Tipo</th><th>Nota</th><th style="text-align:right">Monto</th></tr></thead><tbody>' + pagos.map(x=>`<tr><td>${fmtF(x.fecha)}</td><td>${x.tipo==='mora'?'Mora':'Cuota'}</td><td>${esc(x.nota||'')}</td><td style="text-align:right">${money(x.monto)}</td></tr>`).join('') + '</tbody></table>' : '<div class="muted">Sin pagos</div>'}
-  <script>window.onload=function(){window.print();};<\/script>
-  </body></html>`;
-  abrirImpresion(html, 'prestamo-' + (cli.nombre || 'cliente'));
+  const bloques = [{k: 'Cliente', v: (cli.nombre || 'Sin cliente') + (cli.tel ? ' · Tel: ' + cli.tel : '')}, {k: 'Estado', v: e.txt},
+    {k: 'Monto', v: money(p.capital)}, d.abierto ? {k: 'Interés', v: `${p.tasa}% ${FREQ_N[p.freq]}`} : {k: 'Cuotas', v: `${p.cuotas} ${FREQ_P[p.freq]}`},
+    {k: d.abierto ? 'Interés del período' : 'Valor cuota', v: money(d.vc)}, {k: d.abierto ? 'Capital pendiente' : 'Total', v: money(d.abierto ? d.capitalPend : d.total)},
+    {k: 'Pagado', v: money(d.pagado)}, {k: 'Saldo pendiente', v: money(d.saldo)}, {k: 'Próximo vencimiento', v: proximoTxt}, ...bloquesMora(p, d),
+    {h: 'Pagos realizados'}];
+  if (pagos.length) bloques.push({tabla: {cols: [{t: 'Fecha', w: 80}, {t: 'Tipo', w: 60}, {t: 'Nota'}, {t: 'Monto', w: 100, der: true}], filas: pagos.map(x => [fmtF(x.fecha), x.tipo === 'mora' ? 'Mora' : 'Cuota', x.nota || '', money(x.monto)])}});
+  else bloques.push({t: 'Sin pagos'});
+  emitirDoc({negocio: c.negocio || 'Mi Negocio Al Día', titulo: 'Resumen de préstamo', bloques}, 'prestamo-' + (cli.nombre || 'cliente'));
 }
 
 /* En el navegador abre la ventana de impresión; en el APK (que no puede imprimir) comparte el documento como archivo .html para abrirlo e imprimir/guardar PDF desde otra app */
@@ -1154,30 +1225,14 @@ function imprimirVista() {
 }
 function imprimirTablaPrestamo(id) {
   const p = S.prestamos.find(x => x.id === id); if (!p) return;
-  const d = detalle(p), cli = cliente(p.clienteId) || {}, e = estadoPrestamo(p);
+  const d = detalle(p), cli = cliente(p.clienteId) || {}, e = estadoPrestamo(p), c = cfg();
   const pe = {pagada: 'Pagada', vencida: 'Vencida', parcial: 'Parcial', pendiente: 'Pendiente'};
-  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Tabla de amortización - ${esc(cli.nombre)}</title>
-  <style>
-    body{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#000}
-    h1{font-size:16px;margin:0 0 6px}
-    h2{font-size:13px;margin:10px 0 6px}
-    table{border-collapse:collapse;width:100%}
-    th,td{border:1px solid #ccc;padding:3px 5px;text-align:left}
-    th{background:#f5f5f5}
-    .num{text-align:right}
-  </style>
-  </head><body>
-  <h1>Mi Negocio Al Día - Tabla de amortización completa</h1>
-  <div>Cliente: <b>${esc(cli.nombre || 'Sin cliente')}</b></div>
-  <div>${d.abierto ? `Préstamo abierto: ${money(p.capital)} al ${p.tasa}% ${FREQ_N[p.freq]} sobre el saldo · Capital pendiente ${money(d.capitalPend)}` : `Préstamo: ${money(p.capital)} al ${p.tasa}% ${p.base==='mensual'?'mensual':'total'} · ${p.cuotas} cuotas ${FREQ_P[p.freq]}`} · Estado: ${e.txt}</div>
-  <div>Total: ${money(d.total)} · Pagado: ${money(d.pagado)} · Saldo: ${money(d.saldo)} · Mora pendiente: ${money(d.moraPend)} (separada)</div>
-  <table>
-    <thead><tr><th>#</th><th>Vence</th><th class="num">${d.abierto ? 'Interés' : 'Cuota'}</th><th class="num">Abonado</th><th class="num">Falta</th><th>Estado</th></tr></thead>
-    <tbody>${d.cuotas.map(c=>`<tr><td>${c.n}</td><td>${fmtF(c.vence)}</td><td class="num">${money(c.monto)}</td><td class="num">${money(c.abona)}</td><td class="num">${money(c.falta)}</td><td>${pe[c.estado]}${c.estado==='vencida'?' ('+c.dias+' d)':''}</td></tr>`).join('')}</tbody>
-  </table>
-  <script>window.onload=function(){window.print();};<\/script>
-  </body></html>`;
-  abrirImpresion(html, 'prestamo-' + (cli.nombre || 'cliente'));
+  const bloques = [{k: 'Cliente', v: cli.nombre || 'Sin cliente'},
+    {t: d.abierto ? `Préstamo abierto: ${money(p.capital)} al ${p.tasa}% ${FREQ_N[p.freq]} sobre el saldo · Capital pendiente ${money(d.capitalPend)}` : `Préstamo: ${money(p.capital)} al ${p.tasa}% ${p.base === 'mensual' ? 'mensual' : 'total'} · ${p.cuotas} cuotas ${FREQ_P[p.freq]}`},
+    {k: 'Estado', v: e.txt}, {t: `Total: ${money(d.total)} · Pagado: ${money(d.pagado)} · Saldo: ${money(d.saldo)}`}, ...bloquesMora(p, d),
+    {tabla: {cols: [{t: '#', w: 30}, {t: 'Vence', w: 90}, {t: d.abierto ? 'Interés' : 'Cuota', w: 95, der: true}, {t: 'Abonado', w: 95, der: true}, {t: 'Falta', w: 95, der: true}, {t: 'Estado'}],
+      filas: d.cuotas.map(q => [q.n, fmtF(q.vence), money(q.monto), money(q.abona), money(q.falta), pe[q.estado] + (q.estado === 'vencida' ? ' (' + q.dias + ' d)' : '')])}}];
+  emitirDoc({negocio: c.negocio || 'Mi Negocio Al Día', titulo: 'Tabla de amortización', bloques}, 'tabla-' + (cli.nombre || 'cliente'));
 }
 
 function verPrestamo(id) {
@@ -1741,6 +1796,20 @@ function dibujarRecibo(r) {
   pasada(ctx, true);
   return cv;
 }
+/* Recibo como PDF real (imagen del recibo dentro de una página) para el APK */
+async function generarPdfRecibo() {
+  if (!RECIBO || !RECIBO.datos) { aviso('No hay recibo para generar PDF.'); return; }
+  try {
+    const cv = dibujarRecibo(RECIBO.datos), b64 = cv.toDataURL('image/jpeg', 0.92).split(',')[1], bin = atob(b64), data = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) data[i] = bin.charCodeAt(i);
+    const w = 300, h = Math.round(300 * cv.height / cv.width);
+    const pdf = pdfArmar([{cont: `q ${w} 0 0 ${h} 0 0 cm /Im Do Q`, img: {data, w: cv.width, h: cv.height}}], w, h);
+    const nombre = `recibo-${(RECIBO.titulo ? RECIBO.titulo.replace(/[^a-z0-9]/gi, '-').toLowerCase() : 'recibo')}-${Date.now()}.pdf`;
+    await compartir(pdf, nombre);
+  } catch (e) {
+    aviso('No se pudo generar el PDF. Usa "Enviar como foto" o "WhatsApp".');
+  }
+}
 async function generarImagenRecibo() {
   if (!RECIBO || !RECIBO.datos) { aviso('No hay recibo para generar imagen.'); return; }
   try {
@@ -1761,7 +1830,7 @@ async function generarImagenRecibo() {
 function mostrarRecibo(r, tel) {
   RECIBO = {txt: reciboTxt(r), titulo: r.titulo, datos: r};
   abrir(`${reciboHTML(r)}<div class="foot noprint"><button class="btn" data-act="cerrar">Cerrar</button><button class="btn" data-act="rec-copiar">Copiar texto</button>
-    <a class="btn" target="_blank" rel="noopener" href="https://wa.me/${telWa(tel)}?text=${encodeURIComponent(RECIBO.txt)}">WhatsApp</a><button class="btn pri" data-act="rec-imagen">Enviar como foto</button>${ES_APP ? '' : '<button class="btn" data-act="rec-imprimir">Imprimir / PDF</button>'}</div>`);
+    <a class="btn" target="_blank" rel="noopener" href="https://wa.me/${telWa(tel)}?text=${encodeURIComponent(RECIBO.txt)}">WhatsApp</a><button class="btn pri" data-act="rec-imagen">Enviar como foto</button>${ES_APP ? '<button class="btn" data-act="rec-pdf">Enviar PDF</button>' : '<button class="btn" data-act="rec-imprimir">Imprimir / PDF</button>'}</div>`);
   document.body.classList.add('rec');
 }
 function reciboVenta(id) {
@@ -1797,13 +1866,13 @@ function reciboPago(id) {
     const capAl = p.capital - S.pagos.filter(y => y.tipo === 'prestamo' && y.refId === p.id && antes(y)).reduce((t, y) => t + ((d.asig[y.id] || {}).capital || 0), 0);
     lineas = [['Concepto', x.liq ? 'Pago total del préstamo' : 'Pago de préstamo abierto'], ['Interés pagado', money(a.interes)], ['Abono a capital', money(a.capital)]];
     if (x.ajuste > 0) lineas.push(['Interés del período no cobrado', money(x.ajuste)]);
-    lineas.push(['Capital pendiente', money(Math.max(0, capAl))]);
+    lineas.push(['Capital pendiente', money(Math.max(0, capAl))], ...lineasMora(d));
     if (x.nota) lineas.push(['Nota', x.nota]);
   } else if (x.tipo === 'prestamo') {
     const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p);
     const pagadoAl = S.pagos.filter(y => y.tipo === 'prestamo' && y.refId === p.id && antes(y)).reduce((a, y) => a + y.monto, 0);
     const hechas = Math.min(p.cuotas, Math.floor((pagadoAl + TOL) / d.vc));
-    lineas = [['Concepto', 'Pago de cuota'], ['Préstamo', money(p.capital)], ['Cuotas completas pagadas', `${hechas} de ${p.cuotas}`], ['Saldo pendiente', money(Math.max(0, d.total - pagadoAl))]];
+    lineas = [['Concepto', 'Pago de cuota'], ['Préstamo', money(p.capital)], ['Cuotas completas pagadas', `${hechas} de ${p.cuotas}`], ['Saldo pendiente', money(Math.max(0, d.total - pagadoAl))], ...lineasMora(d)];
   } else if (x.tipo === 'mora') {
     const p = S.prestamos.find(y => y.id === x.refId), d = detalle(p);
     rc = recCfg('mora');
@@ -2268,8 +2337,9 @@ const ACT = {
   'bk-json': () => { descargar(respaldoJson(), `respaldo-${hoy()}.json`); marcarRespaldo(); },
   'bk-json-share': () => { compartir(respaldoJson(), `respaldo-${hoy()}.json`); marcarRespaldo(); },
   rango: el => rangoRapido(el.dataset.k), imprimir: () => imprimirVista(),
+  'imprimir-prestamo-cliente': el => imprimirPrestamoCliente(el.dataset.id), 'imprimir-tabla-prestamo': el => imprimirTablaPrestamo(el.dataset.id),
   'recibo-venta': el => reciboVenta(el.dataset.id), 'recibo-prestamo': el => reciboPrestamo(el.dataset.id), 'recibo-pago': el => reciboPago(el.dataset.id),
-  'rec-imprimir': () => NATIVO() ? generarImagenRecibo() : window.print(),
+  'rec-imprimir': () => NATIVO() ? generarPdfRecibo() : window.print(), 'rec-pdf': () => generarPdfRecibo(),
   'rec-copiar': async () => { try { await navigator.clipboard.writeText(RECIBO.txt); aviso('Recibo copiado'); } catch (e) { if (NATIVO()) { try { await CAPN.Plugins.Share.share({text: RECIBO.txt, dialogTitle: 'Compartir recibo'}); return; } catch (e2) {} } aviso('No se pudo copiar.'); } },
   'rec-imagen': () => generarImagenRecibo(),
   'nueva-venta': () => formVenta(), 'save-venta': () => saveVenta(),
@@ -2375,6 +2445,7 @@ const BUILD_MINIMO = '1050';
 const NECESITA_ACT = /^\d+$/.test(APP_BUILD) && /^\d+$/.test(BUILD_MINIMO) && parseInt(APP_BUILD, 10) < parseInt(BUILD_MINIMO, 10);
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
+  {f: '3 de noviembre', t: ['Arreglados los botones "Imprimir / PDF" del préstamo y "Imprimir tabla / PDF": ya funcionan', 'En el celular ahora se comparte un PDF de verdad (antes salía un archivo .html); el recibo tiene botón "Enviar PDF"', 'El estado de cuenta y la tabla del préstamo muestran lo atrasado, la mora generada, cobrada y pendiente, y el total atrasado con mora', 'El recibo de pago de cuota ahora trae la mora generada y la mora pendiente']},
   {f: '2 de noviembre', t: ['Nuevo préstamo y Nueva venta: botón "+ Nuevo cliente" para crear el cliente sin salir; al guardarlo vuelves al formulario con ese cliente ya elegido']},
   {f: '1 de noviembre — noche', t: ['Nuevo préstamo ABIERTO: el cliente paga solo el interés de cada período y el capital no se mueve; el interés se calcula sobre el saldo actual', 'Lo que el cliente pague de más del interés abona a capital y baja el próximo interés (al registrar el pago ves cómo se reparte)', 'Botón Pago total: cobra el capital y el interés del período en curso proporcional a los días, o lo exonera si tú decides', 'Los recibos, reportes y el archivo exportado ya reconocen los préstamos abiertos']},
   {f: '30 de octubre — tarde', t: ['Gráfico de Ventas del mes: los números de los días volvieron a su columna (se estaban amontonando)', 'El informe de novedades ya no desaparece si la app se recarga antes de que lo leas', 'Actualización forzada disponible y dormida: solo actúa si algún día lo pides']},
