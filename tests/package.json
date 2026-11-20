@@ -1,0 +1,7 @@
+{
+  "name": "mi-negocio-al-dia-pruebas",
+  "private": true,
+  "description": "Pruebas automáticas de Mi Negocio Al Día (no forman parte de la app)",
+  "scripts": { "test": "node run.js" },
+  "devDependencies": { "jsdom": "^26.1.0" }
+}
