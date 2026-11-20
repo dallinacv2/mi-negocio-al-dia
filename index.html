@@ -421,13 +421,36 @@ async function crearSupabaseDB(cfg, sesion, neg) {
   /* La dueño del negocio es la cuenta que lo creó (negocio.creado_por) */
   ES_DUENA = !!(sesion && sesion.uid && negocioFila.creado_por && negocioFila.creado_por === sesion.uid);
   nbSet(NBK_NG, { id: negId, nombre: negocioFila.nombre || neg.nombre || '', codigo: negocioFila.codigo });
+  /* Supabase entrega como máximo 1000 filas por consulta: se piden por tandas hasta traer todo (si no, con más de 1000 registros faltarían pagos y saldos) */
+  const traerRegistros = async () => {
+    const todo = [], TANDA = 1000;
+    for (let desde = 0; ; desde += TANDA) {
+      const lote = await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&select=id,tipo,datos,updated_at&order=tipo.asc,id.asc&limit=' + TANDA + '&offset=' + desde, {}, token);
+      const l = Array.isArray(lote) ? lote : [];
+      todo.push(...l);
+      if (l.length < TANDA) break;
+    }
+    return todo;
+  };
   const snapDe = col => ({ docs: (S[col] || []).map(o => ({ id: o.id, data: () => o })) });
   const emitir = col => (oyentes[col] || []).forEach(cb => { try { cb(snapDe(col)); } catch (e) {} });
   /* Trae lo remoto y lo une con lo local: por registro gana el último cambio; los borrados ajenos también bajan */
   const mezclar = async primero => {
-    const rows = await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&select=id,tipo,datos,updated_at', {}, token);
+    const rows = await traerRegistros();
     const remotos = new Map(), colsTocadas = new Set();
-    (rows || []).forEach(r => { const k = r.tipo + '::' + r.id; remotos.set(k, r); if (conocer[k] === undefined || String(r.updated_at) > String(conocer[k])) { conocer[k] = r.updated_at; colsTocadas.add(r.tipo); } });
+    /* Lo que este equipo todavía tiene pendiente de subir no se pisa con la versión de la nube */
+    const pendientes = new Set(pendLeer().map(p => p.tipo + '::' + p.id));
+    (rows || []).forEach(r => {
+      const k = r.tipo + '::' + r.id; remotos.set(k, r);
+      if (conocer[k] === undefined || String(r.updated_at) > String(conocer[k])) {
+        conocer[k] = r.updated_at; colsTocadas.add(r.tipo);
+        /* Trae el registro nuevo o la edición hecha desde otro equipo (antes solo se anotaba y nunca llegaba a la pantalla) */
+        if (S[r.tipo] && !pendientes.has(k) && r.datos && typeof r.datos === 'object') {
+          const o = r.datos.id ? r.datos : { ...r.datos, id: r.id }, i = S[r.tipo].findIndex(x => x && x.id === r.id);
+          if (i >= 0) S[r.tipo][i] = o; else S[r.tipo].push(o);
+        }
+      }
+    });
     Object.keys(conocer).forEach(k => { if (!remotos.has(k) && !primero) { const [t, id] = k.split('::'); const i = S[t] ? S[t].findIndex(x => x.id === id) : -1; if (i >= 0) { S[t].splice(i, 1); colsTocadas.add(t); } delete conocer[k]; } });
     colsTocadas.forEach(t => { if (!DATA_COLS.includes(t) && t !== 'tipos' && t !== 'ajustes') colsTocadas.delete(t); });
     colsTocadas.forEach(emitir);
@@ -440,15 +463,26 @@ async function crearSupabaseDB(cfg, sesion, neg) {
   };
   const borrarRow = async (tipo, id) => { await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&tipo=eq.' + encodeURIComponent(tipo) + '&id=eq.' + encodeURIComponent(id), { method: 'DELETE' }, token); delete conocer[tipo + '::' + id]; };
   /* Purga la cola de pendientes (por si hubo cambios hechos sin internet) */
+  let purgando = false;
   async function purgar() {
-    const l = pendLeer(); if (!l.length || !vivo) return;
-    const quedan = [];
-    for (const p of l) { try { p.op === 'borrar' ? await borrarRow(p.tipo, p.id) : await subirRow(p.tipo, p.datos); } catch (e) { if (p.intentos >= 30) return aviso('Un cambio no pudo subirse a la nube; haz un respaldo.'); quedan.push({ ...p, intentos: (p.intentos || 0) + 1 }); } }
-    pendGuardar(quedan);
+    if (purgando || !vivo) return;
+    const l = pendLeer(); if (!l.length) return;
+    purgando = true;
+    try {
+      const hechos = new Set(), fallados = new Set(); let avisar = false;
+      for (const p of l) {
+        const k = JSON.stringify(p);
+        try { p.op === 'borrar' ? await borrarRow(p.tipo, p.id) : await subirRow(p.tipo, p.datos); hechos.add(k); }
+        catch (e) { fallados.add(k); if (p.intentos >= 30) avisar = true; }
+      }
+      /* Se vuelve a leer la cola: los cambios que se anotaron mientras subía no se pierden */
+      pendGuardar(pendLeer().filter(p => !hechos.has(JSON.stringify(p))).map(p => fallados.has(JSON.stringify(p)) ? { ...p, intentos: (p.intentos || 0) + 1 } : p));
+      if (avisar) aviso('Un cambio no pudo subirse a la nube; haz un respaldo.');
+    } finally { purgando = false; }
   }
   /* Toma el negocio remoto; si está vacío y ya hay datos locales, los transfiere a la nube */
   const inicial = (async () => {
-    const rows = await sbApi(cfg, '/rest/v1/registro?negocio_id=eq.' + negId + '&select=id,tipo,datos,updated_at', {}, token);
+    const rows = await traerRegistros();
     const porTipo = {}; (rows || []).forEach(r => { (porTipo[r.tipo] = porTipo[r.tipo] || []).push(r); conocer[r.tipo + '::' + r.id] = r.updated_at; });
     if (!(rows || []).length) {
       /* negocio recién creado: transmite todo lo que este dispositivo ya tenía */
@@ -459,8 +493,8 @@ async function crearSupabaseDB(cfg, sesion, neg) {
     COLS.forEach(c => emitir(c));
     purgar();
   })();
-  let TemporizadorPeriodico = setInterval(() => { if (document.visibilityState === 'visible' && vivo && navigator.onLine !== false) { mezclar(false).catch(() => {}); try { localStorage.setItem(NUBE_FECHA_ULTIMA, String(Date.now())); } catch (e) {} } }, 60000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') mezclar(false).catch(() => {}); });
+  let TemporizadorPeriodico = setInterval(() => { if (document.visibilityState === 'visible' && vivo && navigator.onLine !== false) { purgar().then(() => mezclar(false)).catch(() => {}); try { localStorage.setItem(NUBE_FECHA_ULTIMA, String(Date.now())); } catch (e) {} } }, 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') purgar().then(() => mezclar(false)).catch(() => {}); });
   return {
     nube: true, negocio: { id: negId, nombre: negocioFila.nombre || '', codigo: negocioFila.codigo },
     repicar: mezclar,
@@ -728,7 +762,7 @@ async function guardar(col, obj) {
   contarCambio();
   const i = S[col].findIndex(x => x.id === obj.id);
   if (i >= 0) S[col][i] = obj; else S[col].push(obj);
-  if (DB) { try { await DB.collection(col).doc(obj.id).set(obj); } catch (e) { aviso('No se pudo guardar. Intenta de nuevo.'); } }
+  if (DB) { try { await DB.collection(col).doc(obj.id).set(obj); } catch (e) { aviso(DB.nube ? 'Sin conexión: quedó guardado en este equipo y se subirá solo a la nube. No lo repitas.' : 'No se pudo guardar. Intenta de nuevo.'); } }
   else lsSave();
   pintar();
   return obj;
@@ -757,7 +791,7 @@ function interesTotal(p) {
 const r2 = n => Math.round(n * 100) / 100;
 const TOL = 0.05;   /* diferencias menores a 5 centavos no cuentan como deuda */
 const totalPrestamo = p => r2(p.capital + interesTotal(p));
-const valorCuota = p => r2(totalPrestamo(p) / p.cuotas);
+const valorCuota = p => p.cuotas > 0 ? r2(totalPrestamo(p) / p.cuotas) : 0;
 const montoCuota = (p, i) => i < p.cuotas ? valorCuota(p) : r2(totalPrestamo(p) - valorCuota(p) * (p.cuotas - 1));
 function fechaCuota(p, i) { return p.freq === 'mensual' ? sumaMeses(p.inicio, i) : sumaDias(p.inicio, i * FREQ[p.freq]); }
 
@@ -777,7 +811,8 @@ function detalleAbierto(p, fecha) {
   for (let k = 1; k <= 1200; k++) {
     const vence = fechaCuota(p, k), interes = cap > TOL ? r2(cap * p.tasa / 100) : 0;
     per.push({n: k, vence, monto: interes, abona: 0, falta: interes});
-    while (idx < pg.length && pg[idx].fecha <= vence) {
+    /* Un pago total (con 'ajuste') hecho justo el día de un vencimiento se aplica en el período siguiente: el ajuste es del interés del período en curso, no del que vence ese día */
+    while (idx < pg.length && (pg[idx].fecha < vence || (pg[idx].fecha === vence && !(pg[idx].ajuste > 0)))) {
       const x = pg[idx++]; let m = x.monto; const a = asig[x.id] = {interes: 0, capital: 0};
       if (x.ajuste > 0) { const q = per[per.length - 1], aj = Math.min(x.ajuste, q.falta); q.falta = r2(q.falta - aj); q.monto = r2(q.monto - aj); condonado += aj; }
       for (const q of per) {
@@ -861,7 +896,7 @@ function estadoPrestamo(p) {
 const cliente = id => S.clientes.find(c => c.id === id);
 const nombreCli = id => (cliente(id) || {nombre: 'Cliente general'}).nombre;
 const producto = id => S.productos.find(p => p.id === id);
-const ventaPagado = v => v.pagado0 + S.pagos.filter(x => x.tipo === 'venta' && x.refId === v.id).reduce((a, x) => a + x.monto, 0);
+const ventaPagado = v => (v.pagado0 || 0) + S.pagos.filter(x => x.tipo === 'venta' && x.refId === v.id).reduce((a, x) => a + x.monto, 0);
 const ventaSaldo = v => Math.max(0, Math.round((v.total - ventaPagado(v) - (v.financiado || 0)) * 100) / 100);
 /* Mora de una venta a crédito (opcional, v.mora = % del saldo por día desde la fecha de pago).
    Se calcula por tramos: cada abono tardío deja mora por los días que el saldo estuvo sin pagar; lo que sigue pendiente sigue creciendo.
@@ -870,7 +905,7 @@ function moraVenta(v) {
   const cob = r2(S.pagos.filter(x => x.tipo === 'mora' && x.refId === v.id).reduce((a, x) => a + x.monto, 0)), tasa = (v.mora || 0) / 100;
   if (!(tasa > 0) || !v.vence) return {mora: 0, moraCobrada: cob, moraPend: 0};
   const pg = S.pagos.filter(x => x.tipo === 'venta' && x.refId === v.id).sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.creado || 0) - (b.creado || 0));
-  let bal = v.total - v.pagado0 - (v.financiado || 0), cur = v.vence, mora = 0;
+  let bal = v.total - (v.pagado0 || 0) - (v.financiado || 0), cur = v.vence, mora = 0;
   pg.forEach(x => { if (bal <= 0.005) return; if (x.fecha > cur) { mora += bal * tasa * diffDias(x.fecha, cur); cur = x.fecha; } bal -= x.monto; });
   if (bal > 0.005) mora += bal * tasa * Math.max(0, diffDias(hoy(), cur));
   mora = r2(mora);
@@ -1525,7 +1560,7 @@ function leerVenta() {
     const cant = num(r.querySelector('.vc').value), pr = r.querySelector('.vpr').value;
     return {pid: p.id, nombre: p.nombre, cant, precio: pr === '' ? p.precio : num(pr), costo: p.costo || 0, garantia: r.querySelector('.vg').value.trim()};
   }).filter(i => i && i.cant > 0);
-  return {items, total: items.reduce((a, i) => a + i.cant * i.precio, 0)};
+  return {items, total: r2(items.reduce((a, i) => a + i.cant * i.precio, 0))};
 }
 function previewVenta() {
   const {total} = leerVenta(), c = v$('cobrado'), pag = c === '' ? total : num(c);
@@ -1632,7 +1667,7 @@ async function saveEntrada() {
   const p = producto(v$('pid')), cant = num(v$('cant')), costo = num(v$('costo'));
   if (!p || cant <= 0) return aviso('Escribe la cantidad que llegó.');
   await guardar('productos', {...p, stock: p.stock + cant, costo: costo > 0 ? costo : p.costo});
-  if (document.getElementById('f-gasto').checked && costo > 0) await guardar('gastos', {id: uid(), concepto: 'Compra de ' + p.nombre, monto: cant * costo, fecha: hoy(), cat: 'Compra de mercancía', creado: Date.now()});
+  if (document.getElementById('f-gasto').checked && costo > 0) await guardar('gastos', {id: uid(), concepto: 'Compra de ' + p.nombre, monto: r2(cant * costo), fecha: hoy(), cat: 'Compra de mercancía', creado: Date.now()});
   cerrar(); aviso('Entrada guardada');
 }
 
@@ -1715,7 +1750,11 @@ function iniciarBloqueo() {
     lockPintar(''); if (lockBuf.length === pn.len) lockProbar();
   });
   $('#lock-forgot').addEventListener('click', () => confirmar('¿Olvidaste tu PIN?', 'La única forma es borrar todos los datos de la app y entrar de nuevo vacía. Después puedes restaurar tu respaldo (.json). Si no tienes respaldo, esos datos se pierden.', 'Borrar todo y entrar', () => {
-    try { localStorage.clear(); } catch (e) {} location.reload(); }));
+    /* Borra de verdad: configuración, sesión y la base de datos del teléfono (antes solo se borraba la configuración y los datos seguían ahí, sin PIN) */
+    try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
+    let listo = false; const recargar = () => { if (!listo) { listo = true; location.reload(); } };
+    try { const r = indexedDB.deleteDatabase('mnad-local-v1'); r.onsuccess = r.onerror = r.onblocked = recargar; } catch (e) { recargar(); }
+    setTimeout(recargar, 1500); }));
   const fuera = () => { bgAt = Date.now(); }, dentro = () => { if (pinGet() && bgAt && Date.now() - bgAt > 60000) bloquear(); bgAt = 0; };
   document.addEventListener('visibilitychange', () => document.hidden ? fuera() : dentro());
   document.addEventListener('pause', fuera); document.addEventListener('resume', dentro);
@@ -2001,8 +2040,8 @@ function sheetXml(rows) {
   const body = rows.map((r, ri) => `<row r="${ri + 1}">${r.map((c, ci) => {
     const ref = colL(ci) + (ri + 1);
     if (ri === 0) return `<c r="${ref}" s="1" t="inlineStr"><is><t>${xesc(c)}</t></is></c>`;
-    if (c && c.m !== undefined) return `<c r="${ref}" s="2"><v>${Math.round(c.m * 100) / 100}</v></c>`;
-    if (typeof c === 'number') return `<c r="${ref}"><v>${c}</v></c>`;
+    if (c && c.m !== undefined) return `<c r="${ref}" s="2"><v>${Number.isFinite(c.m) ? Math.round(c.m * 100) / 100 : 0}</v></c>`;
+    if (typeof c === 'number') return `<c r="${ref}"><v>${Number.isFinite(c) ? c : 0}</v></c>`;
     return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xesc(c)}</t></is></c>`;
   }).join('')}</row>`).join('');
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${w}</cols><sheetData>${body}</sheetData></worksheet>`;
@@ -2463,6 +2502,7 @@ const BUILD_MINIMO = '1050';
 const NECESITA_ACT = /^\d+$/.test(APP_BUILD) && /^\d+$/.test(BUILD_MINIMO) && parseInt(APP_BUILD, 10) < parseInt(BUILD_MINIMO, 10);
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
+  {f: '20 de noviembre', t: ['Revisión completa de la app: se corrigieron varios detalles internos, sin cambiar cómo se usa', 'Si usas la app en dos teléfonos, lo que registra uno ahora aparece solo en el otro (antes había que cerrar y abrir la app)', 'Pago total de un préstamo abierto el mismo día del vencimiento: el interés ahora cuenta como cobrado y los reportes cuadran', 'Si no hay internet al guardar, la app avisa que quedó guardado en el equipo y se sube solo cuando vuelve la red', 'Con muchos registros en la nube (más de mil) ahora se cargan todos', '"Olvidé mi PIN" ahora sí borra los datos del teléfono, como decía el aviso']},
   {f: '3 de noviembre — noche', t: ['Ventas a crédito: ahora puedes ponerles un cargo por atraso (% del saldo por día). Si el cliente no paga en la fecha acordada, empieza a generarse mora', 'La mora de una venta sale en la lista de cobros, en la lista de ventas y en los recibos; se cobra aparte del saldo, igual que en los préstamos', 'Si lo dejas en 0 no cobra mora, como antes']},
   {f: '3 de noviembre', t: ['Arreglados los botones "Imprimir / PDF" del préstamo y "Imprimir tabla / PDF": ya funcionan', 'En el celular ahora se comparte un PDF de verdad (antes salía un archivo .html); el recibo tiene botón "Enviar PDF"', 'El estado de cuenta y la tabla del préstamo muestran lo atrasado, la mora generada, cobrada y pendiente, y el total atrasado con mora', 'El recibo de pago de cuota ahora trae la mora generada y la mora pendiente']},
   {f: '2 de noviembre', t: ['Nuevo préstamo y Nueva venta: botón "+ Nuevo cliente" para crear el cliente sin salir; al guardarlo vuelves al formulario con ese cliente ya elegido']},
