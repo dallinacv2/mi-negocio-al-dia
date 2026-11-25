@@ -1077,7 +1077,7 @@ function vCobros(cobros) {
   return `<div class="tools"><div class="seg">${chip('todos', 'Todos')}${chip('atrasados', 'Atrasados')}${chip('hoy', 'Hoy')}${chip('semana', '7 días')}</div></div>
   <div class="panel">${L.length ? L.map(rowCobro).join('') : vacio('Nada por cobrar aquí', 'Cuando haya cuotas o ventas a crédito pendientes, aparecen en este orden: primero las más antiguas.')}</div>
   ${L.length ? `<p class="small muted">${L.length} ${L.length === 1 ? 'cobro' : 'cobros'} por ${money(tot)}</p>` : ''}
-  <div class="sec"><h2>Cobros recientes</h2><div class="panel">${rec.length ? rec.map(x => `<div class="row"><div class="main"><div class="t">${esc(nombreCli(x.clienteId))}</div><div class="s">${fmtF(x.fecha)} · ${TIPO_PAGO[x.tipo] || x.tipo}${x.nota ? ' · ' + esc(x.nota) : ''}</div></div><div class="amt">${money(x.monto)}</div><div class="acts"><button class="btn sm" data-act="recibo-pago" data-id="${x.id}">Recibo</button><button class="btn sm danger" data-act="del-pago" data-id="${x.id}">Anular</button></div></div>`).join('') : vacio('Sin cobros todavía', 'Cada pago que registres queda aquí.')}</div></div>`;
+  <div class="sec"><h2>Cobros recientes</h2><div class="panel">${rec.length ? rec.map(x => `<div class="row"><div class="main"><div class="t">${esc(nombreCli(x.clienteId))}</div><div class="s">${fmtF(x.fecha)} · ${TIPO_PAGO[x.tipo] || x.tipo}${x.nota ? ' · ' + esc(x.nota) : ''}</div></div><div class="amt">${money(x.monto)}</div><div class="acts"><button class="btn sm" data-act="edit-pago" data-id="${x.id}">Editar</button><button class="btn sm" data-act="recibo-pago" data-id="${x.id}">Recibo</button><button class="btn sm danger" data-act="del-pago" data-id="${x.id}">Anular</button></div></div>`).join('') : vacio('Sin cobros todavía', 'Cada pago que registres queda aquí.')}</div></div>`;
 }
 /* ===== Pantallas: Préstamos y Clientes ===== */
 const buscaBox = (ph) => `<input id="q" type="search" placeholder="${ph}" value="${esc(UI.q)}" autocomplete="off">`;
@@ -1308,10 +1308,10 @@ function verPrestamo(id) {
     <button class="btn sm" data-act="imprimir-tabla-prestamo" data-id="${id}">Imprimir tabla / PDF</button>
   </div>
   <h3 style="margin:16px 0 6px;font-size:15px">Pagos recibidos</h3>
-  ${pagos.length ? pagos.map(x => { const a = d.abierto && x.tipo === 'prestamo' ? d.asig[x.id] : null; return `<div class="row" style="padding-inline:0"><div class="main"><div class="t">${fmtF(x.fecha)} · ${x.tipo === 'mora' ? 'Mora' : a ? 'Interés' + (a.capital > 0 ? ' + capital' : '') : 'Cuota'}</div><div class="s">${a ? `Interés ${money(a.interes)} · Capital ${money(a.capital)}` + (x.nota ? ' · ' : '') : ''}${esc(x.nota || '')}</div></div><div class="amt">${money(x.monto)}</div><button class="btn sm" data-act="recibo-pago" data-id="${x.id}">Recibo</button></div>`; }).join('') : '<p class="small muted">Todavía no hay pagos.</p>'}
+  ${pagos.length ? pagos.map(x => { const a = d.abierto && x.tipo === 'prestamo' ? d.asig[x.id] : null; return `<div class="row" style="padding-inline:0"><div class="main"><div class="t">${fmtF(x.fecha)} · ${x.tipo === 'mora' ? 'Mora' : a ? 'Interés' + (a.capital > 0 ? ' + capital' : '') : 'Cuota'}</div><div class="s">${a ? `Interés ${money(a.interes)} · Capital ${money(a.capital)}` + (x.nota ? ' · ' : '') : ''}${esc(x.nota || '')}</div></div><div class="amt">${money(x.monto)}</div><button class="btn sm" data-act="edit-pago" data-id="${x.id}">Editar</button><button class="btn sm" data-act="recibo-pago" data-id="${x.id}">Recibo</button></div>`; }).join('') : '<p class="small muted">Todavía no hay pagos.</p>'}
   ${d.condonado > 0 ? `<p class="small muted">Interés del período en curso no cobrado en el pago total: ${money(d.condonado)}</p>` : ''}
   ${p.nota ? `<p class="small muted">Nota: ${esc(p.nota)}</p>` : ''}
-  <div class="foot"><button class="btn" data-act="ver-prestamo-cliente" data-id="${id}">Vista para cliente</button><button class="btn danger" data-act="del-prestamo" data-id="${id}">Eliminar</button><button class="btn" data-act="recibo-prestamo" data-id="${id}">Recibo del préstamo</button><button class="btn" data-act="cerrar">Cerrar</button>
+  <div class="foot"><button class="btn" data-act="ver-prestamo-cliente" data-id="${id}">Vista para cliente</button><button class="btn danger" data-act="del-prestamo" data-id="${id}">Eliminar</button><button class="btn" data-act="edit-prestamo" data-id="${id}">Editar</button><button class="btn" data-act="recibo-prestamo" data-id="${id}">Recibo del préstamo</button><button class="btn" data-act="cerrar">Cerrar</button>
     ${d.abierto && !d.saldado ? `<button class="btn" data-act="liquidar" data-id="${id}">Pago total</button>` : ''}
     ${d.saldado && d.moraPend <= 0 ? '' : `<button class="btn pri" data-act="cobrar" data-kind="prestamo" data-id="${id}">Registrar pago</button>`}</div>`);
 }
@@ -1358,16 +1358,16 @@ function vVentas() {
   if (UI.vg === 'gastos') {
     const L = S.gastos.filter(g => coincide(g.concepto + ' ' + (g.cat || ''))).sort((a, b) => a.fecha < b.fecha ? 1 : -1);
     return kp + `<div class="tools">${buscaBox('Buscar gasto')}${seg}<button class="btn pri" data-act="nuevo-gasto">Nuevo gasto</button></div>
-    <div class="panel">${L.length ? L.map(g => `<div class="row"><div class="main"><div class="t">${esc(g.concepto)}</div><div class="s">${fmtF(g.fecha)}${g.cat ? ' · ' + esc(g.cat) : ''}</div></div><div class="amt">${money(g.monto)}</div><button class="btn sm danger" data-act="del-gasto" data-id="${g.id}">Quitar</button></div>`).join('')
+    <div class="panel">${L.length ? L.map(g => `<div class="row"><div class="main"><div class="t">${esc(g.concepto)}</div><div class="s">${fmtF(g.fecha)}${g.cat ? ' · ' + esc(g.cat) : ''}</div></div><div class="amt">${money(g.monto)}</div><div class="acts"><button class="btn sm" data-act="edit-gasto" data-id="${g.id}">Editar</button><button class="btn sm danger" data-act="del-gasto" data-id="${g.id}">Quitar</button></div></div>`).join('')
       : vacio('Sin gastos registrados', 'Anota alquiler, transporte, compras y otros gastos para saber tu ganancia real.')}</div>`;
   }
   const L = S.ventas.filter(v => coincide(nombreCli(v.clienteId) + ' ' + v.items.map(i => i.nombre).join(' '))).sort((a, b) => a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : (a.creado < b.creado ? 1 : -1));
   return kp + `<div class="tools">${buscaBox('Buscar venta o cliente')}${seg}<button class="btn pri" data-act="nueva-venta">Nueva venta</button></div>
   <div class="panel">${L.length ? L.slice(0, 80).map(v => { const s = ventaSaldo(v), mv = moraVenta(v);
     return `<div class="row"><div class="main"><div class="t">${esc(nombreCli(v.clienteId))} ${s > 0 ? `<span class="pill ${v.vence && diffDias(hoy(), v.vence) > 0 ? 'bad' : 'warn'}">Debe ${money(s)}</span>` : '<span class="pill ok">Pagada</span>'}${mv.moraPend > 0 ? ` <span class="pill bad">Mora ${money(mv.moraPend)}</span>` : ''}</div>
-      <div class="s">${fmtF(v.fecha)} · ${v.items.map(i => i.cant + ' ' + esc(i.nombre)).join(', ')}</div></div>
+      <div class="s">${fmtF(v.fecha)} · ${v.items.map(i => i.cant + ' ' + esc(i.nombre)).join(', ')}${v.nota ? ' · ' + esc(v.nota) : ''}</div></div>
       <div class="amt">${money(v.total)}</div>
-      <div class="acts">${s > 0 || mv.moraPend > 0 ? `<button class="btn sm pri" data-act="cobrar" data-kind="venta" data-id="${v.id}">Cobrar</button>` : ''}${s > 0 && v.clienteId ? `<button class="btn sm" data-act="financiar" data-id="${v.id}">Financiar</button>` : ''}<button class="btn sm" data-act="recibo-venta" data-id="${v.id}">Recibo</button><button class="btn sm danger" data-act="del-venta" data-id="${v.id}">Anular</button></div></div>`; }).join('')
+      <div class="acts">${s > 0 || mv.moraPend > 0 ? `<button class="btn sm pri" data-act="cobrar" data-kind="venta" data-id="${v.id}">Cobrar</button>` : ''}${s > 0 && v.clienteId ? `<button class="btn sm" data-act="financiar" data-id="${v.id}">Financiar</button>` : ''}<button class="btn sm" data-act="edit-venta" data-id="${v.id}">Editar</button><button class="btn sm" data-act="recibo-venta" data-id="${v.id}">Recibo</button><button class="btn sm danger" data-act="del-venta" data-id="${v.id}">Anular</button></div></div>`; }).join('')
     : vacio('Aún no hay ventas', 'Registra una venta y el inventario baja solo. Si el cliente no paga todo, queda como crédito.')}</div>`;
 }
 
@@ -1417,25 +1417,31 @@ async function saveCliente(id) {
   await guardar('clientes', nuevo);
   const volver = VOLVER_A; VOLVER_A = '';
   cerrar(); aviso('Cliente guardado');
-  if (!id && volver === 'prestamo') formPrestamo(nuevo.id); else if (!id && volver === 'venta') formVenta(nuevo.id);
+  if (!id && volver === 'prestamo') formPrestamo(nuevo.id);
+  else if (!id && volver === 'venta') { const B = BORRADOR_VENTA; BORRADOR_VENTA = null; if (B) formVenta(null, B.edit, {...B.est, cli: nuevo.id}); else formVenta(nuevo.id); }
 }
 
 /* ----- Préstamo ----- */
-function formPrestamo(cli) {
-  if (!S.clientes.length) { aviso('Primero agrega un cliente.'); return formCliente(undefined, 'prestamo'); }
-  abrir(`<h2>Nuevo préstamo</h2><div class="f" data-live="prestamo">
-    ${sel('cli', 'Cliente', optsCli('Elige un cliente').slice(1), cli || S.clientes[0].id, 'full')}
+function formPrestamo(cli, editId) {
+  const e0 = editId ? S.prestamos.find(x => x.id === editId) : null;
+  if (editId && !e0) return;
+  if (!e0 && !S.clientes.length) { aviso('Primero agrega un cliente.'); return formCliente(undefined, 'prestamo'); }
+  const nPagos = e0 ? S.pagos.filter(x => (x.tipo === 'prestamo' || x.tipo === 'mora') && x.refId === editId).length : 0;
+  const ab0 = !!(e0 && esAbierto(e0)), lockCap = !!(e0 && e0.ventaId);
+  abrir(`<h2>${e0 ? 'Editar préstamo' : 'Nuevo préstamo'}</h2>${nPagos ? `<p class="small" style="margin:0 0 10px;padding:8px 10px;border-radius:8px;background:rgba(255,170,0,.14)">Este préstamo ya tiene ${nPagos} ${nPagos === 1 ? 'pago' : 'pagos'}. Se conservan, pero los saldos y las cuotas se recalculan con los datos nuevos.</p>` : ''}<div class="f" data-live="prestamo">
+    ${sel('cli', 'Cliente', optsCli('Elige un cliente').slice(1), e0 ? e0.clienteId : (cli || S.clientes[0].id), 'full')}
     <div class="full"><button type="button" class="btn sm" data-act="cliente-rapido" data-from="prestamo">+ Nuevo cliente</button></div>
-    ${S.tipos.length ? sel('tipo', 'Tipo de préstamo (llena los datos solo)', [['', 'Personalizado'], ...S.tipos.map(t => [t.id, `${t.nombre} · ${t.tasa}% ${t.base === 'mensual' ? 'mensual' : 'total'} · ${t.cuotas} cuotas ${FREQ_P[t.freq]}`])], '', 'full') : ''}
-    ${sel('modo', 'Modalidad', [['cuotas', 'Con cuotas fijas'], ['abierto', 'Abierto: solo paga el interés']], 'cuotas', 'full')}
-    ${fld('capital', 'Monto prestado (RD$)', '', 'number', 'placeholder="10000"')}${fld('tasa', 'Porcentaje de interés', '', 'number', 'placeholder="20"')}
-    <div class="full" id="g-base">${sel('base', 'El porcentaje se aplica', [['total', 'Una sola vez, sobre todo el préstamo'], ['mensual', 'Cada mes de duración']], 'total', 'full')}</div>
-    <div id="g-cuotas">${fld('cuotas', 'Número de cuotas', '4', 'number', 'min="1" step="1"')}</div>${sel('freq', 'Pagos', [['diario', 'Diarios'], ['semanal', 'Semanales'], ['quincenal', 'Quincenales'], ['mensual', 'Mensuales']], 'semanal')}
-    ${fld('inicio', 'Fecha del préstamo', hoy(), 'date')}${fld('mora', 'Cargo por atraso (% de la cuota por día)', '0', 'number', 'title="Déjalo en 0 si no cobras mora"')}
-    <div class="full"><label for="f-cond">Condiciones (salen en el comprobante)</label><textarea id="f-cond" rows="2" placeholder="Se llenan solas si eliges un tipo; puedes cambiarlas para este préstamo"></textarea></div>
-    ${fld('nota', 'Nota interna (no sale en el comprobante)', '', 'text', '', 'full')}
+    ${S.tipos.length ? sel('tipo', 'Tipo de préstamo (llena los datos solo)', [['', e0 ? 'Dejar como está' : 'Personalizado'], ...S.tipos.map(t => [t.id, `${t.nombre} · ${t.tasa}% ${t.base === 'mensual' ? 'mensual' : 'total'} · ${t.cuotas} cuotas ${FREQ_P[t.freq]}`])], '', 'full') : ''}
+    ${sel('modo', 'Modalidad', [['cuotas', 'Con cuotas fijas'], ['abierto', 'Abierto: solo paga el interés']], ab0 ? 'abierto' : 'cuotas', 'full')}
+    ${fld('capital', lockCap ? 'Monto (viene de la venta, no se cambia aquí)' : 'Monto prestado (RD$)', e0 ? e0.capital : '', 'number', lockCap ? 'readonly' : 'placeholder="10000"')}${fld('tasa', 'Porcentaje de interés', e0 ? e0.tasa : '', 'number', 'placeholder="20"')}
+    <div class="full" id="g-base">${sel('base', 'El porcentaje se aplica', [['total', 'Una sola vez, sobre todo el préstamo'], ['mensual', 'Cada mes de duración']], e0 && e0.base === 'mensual' ? 'mensual' : 'total', 'full')}</div>
+    <div id="g-cuotas">${fld('cuotas', 'Número de cuotas', e0 && !ab0 ? e0.cuotas : '4', 'number', 'min="1" step="1"')}</div>${sel('freq', 'Pagos', [['diario', 'Diarios'], ['semanal', 'Semanales'], ['quincenal', 'Quincenales'], ['mensual', 'Mensuales']], e0 ? e0.freq : 'semanal')}
+    ${fld('inicio', 'Fecha del préstamo', e0 ? e0.inicio : hoy(), 'date')}${fld('mora', 'Cargo por atraso (% de la cuota por día)', e0 ? (e0.mora || 0) : '0', 'number', 'title="Déjalo en 0 si no cobras mora"')}
+    <div class="full"><label for="f-cond">Condiciones (salen en el comprobante)</label><textarea id="f-cond" rows="2" placeholder="Se llenan solas si eliges un tipo; puedes cambiarlas para este préstamo">${esc(e0 ? (e0.condiciones || '') : '')}</textarea></div>
+    ${fld('nota', 'Nota interna (no sale en el comprobante)', e0 ? (e0.nota || '') : '', 'text', '', 'full')}
     <div class="full preview" id="prev">Completa el monto y el porcentaje para ver la cuota.</div></div>
-    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-prestamo">Crear préstamo</button></div>`);
+    <div class="foot"><button class="btn" data-act="${e0 ? 'ver-prestamo' : 'cerrar'}" data-id="${editId || ''}">Cancelar</button><button class="btn pri" data-act="save-prestamo" data-id="${editId || ''}">${e0 ? 'Guardar cambios' : 'Crear préstamo'}</button></div>`);
+  if (e0) { ajustarModo(); previewPrestamo(); }
 }
 function leerPrestamo() {
   const abierto = v$('modo') === 'abierto';
@@ -1457,11 +1463,22 @@ function previewPrestamo() {
   e.innerHTML = `Interés <b class="num">${money(interesTotal(p))}</b> · Total a pagar <b class="num">${money(totalPrestamo(p))}</b><br>
     ${p.cuotas} cuotas de <b class="num">${money(valorCuota(p))}</b> · primera el ${fmtF(fechaCuota(p, 1))} · última el ${fmtF(fechaCuota(p, p.cuotas))}`;
 }
-async function savePrestamo() {
+async function savePrestamo(editId) {
   const p = leerPrestamo();
   if (p.capital <= 0) return aviso('Escribe el monto prestado.');
   if (p.tasa < 0) return aviso('El porcentaje no puede ser negativo.');
+  if (p.mora < 0) return aviso('El cargo por atraso no puede ser negativo.');
   const tp = S.tipos.find(t => t.id === v$('tipo'));
+  const old = editId ? S.prestamos.find(x => x.id === editId) : null;
+  if (editId && !old) return;
+  if (old) {
+    if (old.ventaId) p.capital = old.capital;   /* el monto de un préstamo que viene de una venta no se cambia aquí */
+    const cambiado = {...old, ...p, clienteId: v$('cli') || old.clienteId, tipoNombre: tp ? tp.nombre : (old.tipoNombre || ''), condiciones: v$('cond'), nota: v$('nota')};
+    if (!p.modo) delete cambiado.modo;           /* si pasó de abierto a cuotas fijas */
+    await guardar('prestamos', cambiado);
+    if (cambiado.clienteId !== old.clienteId) for (const x of S.pagos.filter(x => (x.tipo === 'prestamo' || x.tipo === 'mora') && x.refId === editId)) await guardar('pagos', {...x, clienteId: cambiado.clienteId});
+    cerrar(); aviso('Préstamo corregido'); verPrestamo(editId); return;
+  }
   const nuevo = {...p, id: uid(), clienteId: v$('cli'), tipoNombre: tp ? tp.nombre : '', condiciones: v$('cond'), nota: v$('nota'), creado: Date.now()};
   await guardar('prestamos', nuevo);
   cerrar(); UI.tab = 'prestamos'; pintar(); aviso('Préstamo creado'); reciboPrestamo(nuevo.id);
@@ -1521,6 +1538,35 @@ async function saveLiquidar(id) {
   await guardar('pagos', pago);
   cerrar(); aviso('Préstamo saldado'); reciboPago(pago.id);
 }
+/* ----- Corregir un pago ya registrado (monto, fecha y nota). El pago total (liq) solo permite cambiar la nota ----- */
+function conPagoExcluido(id, fn) { const orig = S.pagos; S.pagos = orig.filter(x => x.id !== id); try { return fn(); } finally { S.pagos = orig; } }
+function topePago(x) {
+  const kind = x.tipo === 'venta' ? 'venta' : (S.prestamos.some(p => p.id === x.refId) ? 'prestamo' : 'venta');
+  if (kind === 'prestamo' ? !S.prestamos.some(p => p.id === x.refId) : !S.ventas.some(v => v.id === x.refId)) return null;
+  return conPagoExcluido(x.id, () => cobroInfo(kind, x.refId, x.tipo === 'mora' ? 'mora' : 'cuota').saldo);
+}
+function formPago(id) {
+  const x = S.pagos.find(p => p.id === id); if (!x) return;
+  const tope = x.liq ? null : topePago(x);
+  abrir(`<h2>Editar pago</h2><p style="margin:0 0 12px"><b>${esc(nombreCli(x.clienteId))}</b><br><span class="muted small">${TIPO_PAGO[x.tipo] || x.tipo}${tope != null ? ` · lo máximo que se puede poner es ${money(tope)}` : ''}</span></p>
+    ${x.liq ? '<p class="small" style="margin:0 0 10px">Este es un Pago total: aquí solo se puede cambiar la nota. Si el monto está mal, anula el pago y registra otro Pago total.</p>' : ''}
+    <div class="f">${fld('monto', 'Monto recibido (RD$)', String(x.monto), 'number', x.liq ? 'disabled' : '')}${fld('fecha', 'Fecha', x.fecha, 'date', x.liq ? 'disabled' : '')}${fld('nota', 'Nota', x.nota || '', 'text', '', 'full')}</div>
+    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-pago" data-id="${id}">Guardar cambios</button></div>`);
+}
+async function savePago(id) {
+  const x = S.pagos.find(p => p.id === id); if (!x) return;
+  let nuevo;
+  if (x.liq) nuevo = {...x, nota: v$('nota')};
+  else {
+    const m = num(v$('monto')), tope = topePago(x);
+    if (m <= 0) return aviso('Escribe el monto recibido.');
+    if (tope != null && m > tope + 0.005) return aviso('El pago es mayor que lo que debe (' + money(tope) + ').');
+    nuevo = {...x, monto: m, fecha: v$('fecha') || x.fecha, nota: v$('nota')};
+  }
+  await guardar('pagos', nuevo);
+  cerrar(); aviso('Pago corregido');
+  if (S.prestamos.some(p => p.id === x.refId) && (x.tipo === 'prestamo' || x.tipo === 'mora')) verPrestamo(x.refId);
+}
 /* Préstamo abierto: muestra cómo se reparte el pago entre interés y capital antes de guardarlo */
 function previewCobro() {
   const live = document.querySelector('[data-live="cobro"]'), e = $('#prev-cobro'); if (!live || !e) return;
@@ -1539,24 +1585,54 @@ async function saveCobro(kind, id) {
 }
 
 /* ----- Venta ----- */
-const lineaVenta = () => `<div class="vl" style="display:grid;grid-template-columns:minmax(0,1fr) 64px 92px 32px;gap:6px;margin-bottom:6px">
-  <select class="vp" aria-label="Producto">${[['', 'Producto…'], ...S.productos.map(p => [p.id, `${p.nombre} (${p.stock})`])].map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('')}</select>
-  <input class="vc" type="number" min="1" step="any" value="1" aria-label="Cantidad"><input class="vpr" type="number" min="0" step="any" aria-label="Precio"><button class="btn sm" data-act="quitar-linea" aria-label="Quitar">×</button>
-  <input class="vg" type="text" style="grid-column:1/-1" placeholder="Garantía (se llena sola según el producto; puedes cambiarla)" aria-label="Garantía"></div>`;
-function formVenta(cli) {
-  if (!S.productos.length) { aviso('Primero agrega productos al inventario.'); return formProducto(); }
-  abrir(`<h2>Nueva venta</h2><div class="f" data-live="venta">
-    ${sel('cli', 'Cliente (opcional si pagan todo)', optsCli('Cliente general'), cli || '', 'full')}
+let EDIT_VENTA = '';   /* id de la venta que se está editando ('' = venta nueva) */
+let BORRADOR_VENTA = null;   /* lo escrito en la venta mientras se crea un artículo nuevo desde ella */
+const ventaPrev = id => S.ventas.find(v => v.id === id);
+const cantPrev = (v, pid) => v ? v.items.filter(i => i.pid === pid).reduce((a, i) => a + i.cant, 0) : 0;
+const lineaVenta = (l = {}) => { const v0 = ventaPrev(EDIT_VENTA), pSel = producto(l.pid);
+  const opts = [['', 'Producto…'], ...S.productos.map(p => [p.id, `${p.nombre} (${p.stock + cantPrev(v0, p.id)})`])];
+  if (l.pid && !pSel) opts.push([l.pid, (l.nombre || 'Producto eliminado') + ' (eliminado)']);
+  return `<div class="vl" style="display:grid;grid-template-columns:minmax(0,1fr) 64px 92px 32px;gap:6px;margin-bottom:6px">
+  <select class="vp" aria-label="Producto">${opts.map(([v, t]) => `<option value="${esc(v)}" ${v === (l.pid || '') ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
+  <input class="vc" type="number" min="1" step="any" value="${l.cant ?? 1}" aria-label="Cantidad"><input class="vpr" type="number" min="0" step="any" value="${l.precio ?? ''}" placeholder="${pSel ? pSel.precio : ''}" aria-label="Precio"><button class="btn sm" data-act="quitar-linea" aria-label="Quitar">×</button>
+  <input class="vg" type="text" style="grid-column:1/-1" value="${esc(l.garantia || '')}" placeholder="Garantía (se llena sola según el producto; puedes cambiarla)" aria-label="Garantía"></div>`; };
+/* Foto de lo escrito en el formulario de venta (para volver a él después de crear un cliente o artículo) */
+function leerBorradorVenta() {
+  return {cli: v$('cli'), cobrado: v$('cobrado'), fecha: v$('fecha'), resto: v$('resto'), vence: v$('vence'), mora: v$('mora'), nota: v$('nota'),
+    lineas: [...document.querySelectorAll('#lineas .vl')].map(r => ({pid: r.querySelector('.vp').value, cant: r.querySelector('.vc').value, precio: r.querySelector('.vpr').value, garantia: r.querySelector('.vg').value}))};
+}
+function formVenta(cli, editId, est) {
+  EDIT_VENTA = editId || '';
+  const v0 = editId ? ventaPrev(editId) : null;
+  if (editId && !v0) return;
+  if (!S.productos.length && !est && !v0) { aviso('Primero crea el artículo que vas a vender.'); BORRADOR_VENTA = {est: {}, edit: ''}; return formProducto(undefined, 'venta'); }
+  const bloqueada = !!(v0 && v0.prestamoId && S.prestamos.some(x => x.id === v0.prestamoId));
+  const b = est || (v0 ? {cli: v0.clienteId, cobrado: String(v0.pagado0 || 0), fecha: v0.fecha, resto: 'credito', vence: v0.vence || '', mora: v0.mora || 0, nota: v0.nota || '',
+    lineas: v0.items.map(i => ({pid: i.pid, nombre: i.nombre, cant: i.cant, precio: i.precio, garantia: i.garantia}))} : {cli: cli || ''});
+  const titulo = v0 ? 'Editar venta' : 'Nueva venta';
+  if (bloqueada) {
+    abrir(`<h2>${titulo}</h2><p class="small" style="margin:0 0 10px;padding:8px 10px;border-radius:8px;background:rgba(255,170,0,.14)">Esta venta ya se financió en un préstamo. Aquí solo puedes cambiar el cliente, la fecha y la nota. Para cambiar los productos o el total, elimina primero el préstamo.</p>
+    <p class="small muted" style="margin:0 0 10px">${v0.items.map(i => i.cant + ' ' + esc(i.nombre)).join(', ')} · total ${money(v0.total)}</p>
+    <div class="f">${sel('cli', 'Cliente', optsCli('Cliente general').slice(1), v0.clienteId, 'full')}${fld('fecha', 'Fecha', v0.fecha, 'date')}${fld('nota', 'Nota', v0.nota || '', 'text', '', 'full')}</div>
+    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-venta" data-id="${editId}">Guardar cambios</button></div>`);
+    return;
+  }
+  abrir(`<h2>${titulo}</h2><div class="f" data-live="venta">
+    ${sel('cli', 'Cliente (opcional si pagan todo)', optsCli('Cliente general'), b.cli || '', 'full')}
     <div class="full"><button type="button" class="btn sm" data-act="cliente-rapido" data-from="venta">+ Nuevo cliente</button></div>
-    <div class="full"><label>Productos, cantidad y precio</label><div id="lineas">${lineaVenta()}</div><button class="btn sm" data-act="mas-linea">Agregar otro producto</button></div>
+    <div class="full"><label>Productos, cantidad y precio</label><div id="lineas">${(b.lineas && b.lineas.length ? b.lineas : [{}]).map(l => lineaVenta(l)).join('')}</div><button class="btn sm" data-act="mas-linea">Agregar otro producto</button> <button type="button" class="btn sm" data-act="nuevo-producto-venta">+ Nuevo artículo</button></div>
     <div class="full preview" id="tv">Total: <b class="num">${money(0)}</b></div>
-    ${fld('cobrado', 'Cobrado ahora (RD$)', '', 'number', 'placeholder="Todo, si lo dejas vacío"')}${fld('fecha', 'Fecha', hoy(), 'date')}
-    <div class="full" id="vencebox" hidden>${sel('resto', 'Lo que queda sin pagar', [['credito', 'Dejarlo a crédito (sin interés)'], ['financiar', 'Financiarlo en cuotas con interés']], 'credito', 'full')}${fld('vence', 'Si lo dejas a crédito, fecha en que pagará', sumaDias(hoy(), 15), 'date')}${fld('mora', 'Cargo por atraso (% del saldo por día)', '0', 'number', 'title="Déjalo en 0 si no cobras mora"')}</div></div>
-    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-venta">Registrar venta</button></div>`);
+    ${fld('cobrado', 'Cobrado ahora (RD$)', b.cobrado ?? '', 'number', 'placeholder="Todo, si lo dejas vacío"')}${fld('fecha', 'Fecha', b.fecha || hoy(), 'date')}
+    <div class="full" id="vencebox" hidden>${sel('resto', 'Lo que queda sin pagar', [['credito', 'Dejarlo a crédito (sin interés)'], ['financiar', 'Financiarlo en cuotas con interés']], b.resto || 'credito', 'full')}${fld('vence', 'Si lo dejas a crédito, fecha en que pagará', b.vence || sumaDias(hoy(), 15), 'date')}${fld('mora', 'Cargo por atraso (% del saldo por día)', b.mora ?? '0', 'number', 'title="Déjalo en 0 si no cobras mora"')}</div>
+    ${fld('nota', 'Nota (opcional)', b.nota || '', 'text', '', 'full')}</div>
+    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-venta" data-id="${editId || ''}">${v0 ? 'Guardar cambios' : 'Registrar venta'}</button></div>`);
+  previewVenta();
 }
 function leerVenta() {
+  const v0 = ventaPrev(EDIT_VENTA);
   const items = [...document.querySelectorAll('#lineas .vl')].map(r => {
-    const p = producto(r.querySelector('.vp').value); if (!p) return null;
+    const pid = r.querySelector('.vp').value;
+    const p = producto(pid) || (() => { const o = v0 && v0.items.find(i => i.pid === pid); return o ? {id: pid, nombre: o.nombre, precio: o.precio, costo: o.costo || 0} : null; })(); if (!p) return null;
     const cant = num(r.querySelector('.vc').value), pr = r.querySelector('.vpr').value;
     return {pid: p.id, nombre: p.nombre, cant, precio: pr === '' ? p.precio : num(pr), costo: p.costo || 0, garantia: r.querySelector('.vg').value.trim()};
   }).filter(i => i && i.cant > 0);
@@ -1567,24 +1643,47 @@ function previewVenta() {
   $('#tv').innerHTML = `Total: <b class="num">${money(total)}</b>` + (pag < total - 0.005 ? ` · queda a crédito <b class="num">${money(total - pag)}</b>` : '');
   $('#vencebox').hidden = !(pag < total - 0.005);
 }
-async function saveVenta() {
+async function saveVenta(editId) {
+  const v0 = editId ? ventaPrev(editId) : null;
+  if (editId && !v0) return;
+  /* Venta ya financiada en un préstamo: solo cliente, fecha y nota */
+  if (v0 && v0.prestamoId && S.prestamos.some(x => x.id === v0.prestamoId)) {
+    const cli = v$('cli'), pr = S.prestamos.find(x => x.id === v0.prestamoId);
+    await guardar('ventas', {...v0, clienteId: cli, fecha: v$('fecha') || v0.fecha, nota: v$('nota')});
+    if (cli !== v0.clienteId) {
+      await guardar('prestamos', {...pr, clienteId: cli});
+      for (const x of S.pagos.filter(x => x.refId === v0.id || x.refId === pr.id)) await guardar('pagos', {...x, clienteId: cli});
+    }
+    cerrar(); aviso('Venta corregida'); return;
+  }
+  EDIT_VENTA = editId || '';
   const {items, total} = leerVenta();
   if (!items.length) return aviso('Elige al menos un producto.');
   const porProd = {}; items.forEach(i => { porProd[i.pid] = (porProd[i.pid] || 0) + i.cant; });
-  for (const pid in porProd) { const p = producto(pid); if (porProd[pid] > p.stock) return aviso(`Solo quedan ${p.stock} de ${p.nombre}.`); }
+  const antes = {}; if (v0) v0.items.forEach(i => { antes[i.pid] = (antes[i.pid] || 0) + i.cant; });
+  for (const pid in porProd) { const p = producto(pid); if (!p) { if (antes[pid] != null) continue; return aviso('Un producto de la lista ya no existe.'); } const disp = p.stock + (antes[pid] || 0); if (porProd[pid] > disp) return aviso(`Solo quedan ${disp} de ${p.nombre}.`); }
   if (items.some(i => i.precio < 0)) return aviso('El precio no puede ser negativo.');
   const c = v$('cobrado'), pag = c === '' ? total : num(c);
   if (pag < 0) return aviso('Lo cobrado no puede ser negativo.');
   if (pag > total + 0.005) return aviso('Lo cobrado es mayor que el total.');
+  if (v0) {
+    const yaPagado = S.pagos.filter(x => x.tipo === 'venta' && x.refId === v0.id).reduce((a, x) => a + x.monto, 0) + (v0.financiado || 0);
+    if (pag + yaPagado > total + 0.005) return aviso(`Esta venta ya tiene ${money(yaPagado)} en abonos posteriores; con ese total y lo cobrado ahora se pasa. Corrige los números o el abono.`);
+  }
   const cli = v$('cli');
   if (pag < total - 0.005 && !cli) return aviso('Para vender a crédito elige un cliente.');
   const financiar = pag < total - 0.005 && v$('resto') === 'financiar';
   const fecha = v$('fecha') || hoy();
-  const venta = {id: uid(), fecha, clienteId: cli, items, total, pagado0: pag, vence: pag < total - 0.005 ? (v$('vence') || sumaDias(fecha, 15)) : '', ...(pag < total - 0.005 && num(v$('mora')) > 0 ? {mora: num(v$('mora'))} : {}), creado: Date.now()};
+  const venta = {...(v0 || {}), id: v0 ? v0.id : uid(), fecha, clienteId: cli, items, total, pagado0: pag, vence: pag < total - 0.005 ? (v$('vence') || sumaDias(fecha, 15)) : '', nota: v$('nota'), creado: v0 ? v0.creado : Date.now()};
+  delete venta.mora; if (pag < total - 0.005 && num(v$('mora')) > 0) venta.mora = num(v$('mora'));
   await guardar('ventas', venta);
-  for (const pid in porProd) { const p = producto(pid); await guardar('productos', {...p, stock: p.stock - porProd[pid]}); }
+  /* Inventario: se devuelve lo de antes y se descuenta lo nuevo (solo la diferencia) */
+  const pids = new Set([...Object.keys(porProd), ...Object.keys(antes)]);
+  for (const pid of pids) { const p = producto(pid); const dif = (porProd[pid] || 0) - (antes[pid] || 0); if (p && dif) await guardar('productos', {...p, stock: p.stock - dif}); }
+  if (v0 && cli !== v0.clienteId) for (const x of S.pagos.filter(x => x.refId === v0.id)) await guardar('pagos', {...x, clienteId: cli});
   cerrar();
-  if (financiar) { aviso('Venta registrada. Ahora financia el saldo.'); formFinanciar(venta.id); return; }
+  if (v0 && !financiar) { aviso('Venta corregida'); return; }
+  if (financiar) { aviso((v0 ? 'Venta corregida' : 'Venta registrada') + '. Ahora financia el saldo.'); formFinanciar(venta.id); return; }
   aviso('Venta registrada'); reciboVenta(venta.id);
 }
 /* ----- Financiar el saldo de una venta: se convierte en un préstamo con cuotas ----- */
@@ -1628,32 +1727,49 @@ async function anularVenta(id) {
 }
 
 /* ----- Gasto ----- */
-function formGasto() {
-  abrir(`<h2>Nuevo gasto</h2><div class="f">${fld('concepto', 'En qué se gastó', '', 'text', 'autocomplete="off"', 'full')}${fld('monto', 'Monto (RD$)', '', 'number')}${fld('fecha', 'Fecha', hoy(), 'date')}
-    ${sel('cat', 'Tipo', ['Alquiler', 'Transporte', 'Servicios', 'Sueldos', 'Compra de mercancía', 'Otros'].map(x => [x, x]), 'Otros', 'full')}</div>
-    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-gasto">Guardar gasto</button></div>`);
+function formGasto(id) {
+  const g = id ? S.gastos.find(x => x.id === id) : null; if (id && !g) return;
+  const cats = ['Alquiler', 'Transporte', 'Servicios', 'Sueldos', 'Compra de mercancía', 'Otros']; if (g && g.cat && !cats.includes(g.cat)) cats.push(g.cat);
+  abrir(`<h2>${g ? 'Editar gasto' : 'Nuevo gasto'}</h2><div class="f">${fld('concepto', 'En qué se gastó', g ? g.concepto : '', 'text', 'autocomplete="off"', 'full')}${fld('monto', 'Monto (RD$)', g ? g.monto : '', 'number')}${fld('fecha', 'Fecha', g ? g.fecha : hoy(), 'date')}
+    ${sel('cat', 'Tipo', cats.map(x => [x, x]), g ? (g.cat || 'Otros') : 'Otros', 'full')}</div>
+    <div class="foot"><button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-gasto" data-id="${id || ''}">${g ? 'Guardar cambios' : 'Guardar gasto'}</button></div>`);
 }
-async function saveGasto() {
+async function saveGasto(id) {
   if (!v$('concepto') || num(v$('monto')) <= 0) return aviso('Escribe en qué se gastó y el monto.');
-  await guardar('gastos', {id: uid(), concepto: v$('concepto'), monto: num(v$('monto')), fecha: v$('fecha') || hoy(), cat: v$('cat'), creado: Date.now()});
-  cerrar(); aviso('Gasto guardado');
+  const g = id ? S.gastos.find(x => x.id === id) : null;
+  await guardar('gastos', {...(g || {}), id: g ? g.id : uid(), concepto: v$('concepto'), monto: num(v$('monto')), fecha: v$('fecha') || hoy(), cat: v$('cat'), creado: g ? g.creado : Date.now()});
+  cerrar(); aviso(g ? 'Gasto corregido' : 'Gasto guardado');
 }
 
 /* ----- Producto y entradas de mercancía ----- */
-function formProducto(id) {
+let VOLVER_PROD = '';   /* 'venta': el artículo se creó desde una venta; al guardarlo (o cancelar) se vuelve a ella */
+function formProducto(id, volver) {
+  VOLVER_PROD = volver || '';
   const p = producto(id) || {};
   abrir(`<h2>${id ? 'Editar producto' : 'Nuevo producto'}</h2><div class="f">
     ${fld('nombre', 'Nombre', p.nombre, 'text', 'autocomplete="off"', 'full')}${fld('cat', 'Categoría', p.cat)}${fld('unidad', 'Unidad (uds, lb, litros…)', p.unidad || 'uds')}
     ${fld('costo', 'Costo (RD$)', p.costo ?? '', 'number')}${fld('precio', 'Precio de venta (RD$)', p.precio ?? '', 'number')}
     ${fld('stock', 'Cantidad disponible', p.stock ?? '', 'number')}${fld('minimo', 'Avisar cuando queden', p.minimo ?? 5, 'number')}
     ${fld('garantia', 'Garantía de este producto (sale sola en cada venta; vacío = sin garantía propia)', p.garantia || '', 'text', 'placeholder="Ej: 12 meses"', 'full')}</div>
-    <div class="foot">${id ? `<button class="btn danger" data-act="del-producto" data-id="${id}">Eliminar</button>` : ''}<button class="btn" data-act="cerrar">Cancelar</button><button class="btn pri" data-act="save-producto" data-id="${id || ''}">Guardar</button></div>`);
+    <div class="foot">${id ? `<button class="btn danger" data-act="del-producto" data-id="${id}">Eliminar</button>` : ''}<button class="btn" data-act="${volver === 'venta' ? 'volver-venta' : 'cerrar'}">Cancelar</button><button class="btn pri" data-act="save-producto" data-id="${id || ''}">Guardar</button></div>`);
+}
+/* Vuelve al formulario de venta con lo que ya estaba escrito; si se creó un artículo, queda elegido en una línea */
+function volverAVenta(pidNuevo) {
+  const B = BORRADOR_VENTA || {est: {}, edit: ''}; BORRADOR_VENTA = null; VOLVER_PROD = '';
+  const est = {...B.est, lineas: [...((B.est && B.est.lineas) || [])]};
+  if (pidNuevo) {
+    const p = producto(pidNuevo), l = {pid: pidNuevo, cant: 1, precio: '', garantia: p ? (p.garantia || cfg().garantia || '') : ''};
+    const i = est.lineas.findIndex(x => !x.pid); if (i >= 0) est.lineas[i] = {...est.lineas[i], ...l}; else est.lineas.push(l);
+  }
+  cerrar(); formVenta(null, B.edit, est);
 }
 async function saveProducto(id) {
   if (!v$('nombre') || num(v$('precio')) <= 0) return aviso('Escribe el nombre y el precio de venta.');
   const p = producto(id) || {id: uid(), creado: Date.now()};
   await guardar('productos', {...p, nombre: v$('nombre'), cat: v$('cat'), unidad: v$('unidad') || 'uds', costo: num(v$('costo')), precio: num(v$('precio')), stock: num(v$('stock')), minimo: num(v$('minimo')), garantia: v$('garantia')});
-  cerrar(); aviso('Producto guardado');
+  aviso('Producto guardado');
+  if (VOLVER_PROD === 'venta') return volverAVenta(p.id);
+  cerrar();
 }
 function formEntrada(id) {
   if (!S.productos.length) { aviso('Primero agrega un producto.'); return formProducto(); }
@@ -2267,9 +2383,9 @@ const ACT = {
   vg: el => { UI.vg = el.dataset.k; UI.q = ''; pintar(); },
   cerrar, fondo: () => cerrar(),
   ejemplos: () => cargarEjemplos(), 'quitar-ejemplos': () => quitarEjemplos(),
-  'nuevo-cliente': () => formCliente(), 'cliente-rapido': el => formCliente(undefined, el.dataset.from), 'edit-cliente': el => formCliente(el.dataset.id), 'ver-cliente': el => verCliente(el.dataset.id),
+  'nuevo-cliente': () => formCliente(), 'cliente-rapido': el => { if (el.dataset.from === 'venta') BORRADOR_VENTA = {est: leerBorradorVenta(), edit: EDIT_VENTA}; formCliente(undefined, el.dataset.from); }, 'edit-cliente': el => formCliente(el.dataset.id), 'ver-cliente': el => verCliente(el.dataset.id),
   'save-cliente': el => saveCliente(el.dataset.id),
-  'nuevo-prestamo': el => formPrestamo(el.dataset.cli), 'save-prestamo': () => savePrestamo(), 'liquidar': el => formLiquidar(el.dataset.id), 'save-liquidar': el => saveLiquidar(el.dataset.id), 'ver-prestamo': el => verPrestamo(el.dataset.id),
+  'nuevo-prestamo': el => formPrestamo(el.dataset.cli), 'save-prestamo': el => savePrestamo(el.dataset.id), 'edit-prestamo': el => formPrestamo(undefined, el.dataset.id), 'liquidar': el => formLiquidar(el.dataset.id), 'save-liquidar': el => saveLiquidar(el.dataset.id), 'ver-prestamo': el => verPrestamo(el.dataset.id),
   cobrar: el => formCobro(el.dataset.kind, el.dataset.id), financiar: el => formFinanciar(el.dataset.id), 'save-financiar': el => saveFinanciar(el.dataset.id),
   'save-cobro': el => saveCobro(el.dataset.kind, el.dataset.id),
   tipos: () => formTipos(), 'nuevo-tipo': () => formTipo(), 'edit-tipo': el => formTipo(el.dataset.id), 'save-tipo': el => saveTipo(el.dataset.id),
@@ -2399,10 +2515,13 @@ const ACT = {
   'rec-imprimir': () => NATIVO() ? generarPdfRecibo() : window.print(), 'rec-pdf': () => generarPdfRecibo(),
   'rec-copiar': async () => { try { await navigator.clipboard.writeText(RECIBO.txt); aviso('Recibo copiado'); } catch (e) { if (NATIVO()) { try { await CAPN.Plugins.Share.share({text: RECIBO.txt, dialogTitle: 'Compartir recibo'}); return; } catch (e2) {} } aviso('No se pudo copiar.'); } },
   'rec-imagen': () => generarImagenRecibo(),
-  'nueva-venta': () => formVenta(), 'save-venta': () => saveVenta(),
+  'nueva-venta': () => formVenta(), 'save-venta': el => saveVenta(el.dataset.id), 'edit-venta': el => formVenta(null, el.dataset.id),
+  'nuevo-producto-venta': () => { BORRADOR_VENTA = {est: leerBorradorVenta(), edit: EDIT_VENTA}; formProducto(undefined, 'venta'); },
+  'volver-venta': () => volverAVenta(),
+  'edit-pago': el => formPago(el.dataset.id), 'save-pago': el => savePago(el.dataset.id), 'edit-gasto': el => formGasto(el.dataset.id),
   'mas-linea': () => { $('#lineas').insertAdjacentHTML('beforeend', lineaVenta()); },
   'quitar-linea': el => { const l = $('#lineas'); if (l.children.length > 1) { el.closest('.vl').remove(); previewVenta(); } },
-  'nuevo-gasto': () => formGasto(), 'save-gasto': () => saveGasto(),
+  'nuevo-gasto': () => formGasto(), 'save-gasto': el => saveGasto(el.dataset.id),
   'nuevo-producto': () => formProducto(), 'edit-producto': el => formProducto(el.dataset.id), 'save-producto': el => saveProducto(el.dataset.id),
   entrada: el => formEntrada(el.dataset.id), 'save-entrada': () => saveEntrada(),
   'del-prestamo': async el => { const p0 = S.prestamos.find(x => x.id === el.dataset.id); for (const x of S.pagos.filter(x => (x.tipo === 'prestamo' || x.tipo === 'mora') && x.refId === el.dataset.id)) await borrar('pagos', x.id); await borrar('prestamos', el.dataset.id); const v0 = p0 && p0.ventaId && S.ventas.find(x => x.id === p0.ventaId); if (v0) await guardar('ventas', {...v0, financiado: 0, prestamoId: ''}); cerrar(); aviso(v0 ? 'Préstamo eliminado. La venta volvió a quedar a crédito.' : 'Préstamo eliminado'); },
@@ -2502,6 +2621,7 @@ const BUILD_MINIMO = '1050';
 const NECESITA_ACT = /^\d+$/.test(APP_BUILD) && /^\d+$/.test(BUILD_MINIMO) && parseInt(APP_BUILD, 10) < parseInt(BUILD_MINIMO, 10);
 /* ----- Novedades: informe de lo que trajo la versión nueva. Sale una vez tras cada actualización ----- */
 const NOVEDADES = [
+  {f: '24 de noviembre', t: ['Ahora puedes EDITAR préstamos: en el detalle del préstamo toca "Editar" para corregir monto, interés, cuotas, fecha, mora, notas o modalidad. Los pagos que ya tenía se conservan y los saldos se recalculan solos', 'Ahora puedes EDITAR ventas: toca "Editar" en la venta. El inventario se ajusta solo (devuelve lo anterior y descuenta lo nuevo). Si la venta ya se financió en un préstamo, solo se cambia cliente, fecha y nota', 'Ahora puedes EDITAR gastos y cobros (monto, fecha y nota) si te equivocaste. En un Pago total solo se cambia la nota', 'Nueva venta: botón "+ Nuevo artículo" para crear el artículo sin salir; al guardarlo vuelves a la venta con lo que ya escribiste y el artículo elegido', 'También al crear un cliente nuevo desde una venta ya no se pierde lo que habías escrito']},
   {f: '20 de noviembre', t: ['Revisión completa de la app: se corrigieron varios detalles internos, sin cambiar cómo se usa', 'Si usas la app en dos teléfonos, lo que registra uno ahora aparece solo en el otro (antes había que cerrar y abrir la app)', 'Pago total de un préstamo abierto el mismo día del vencimiento: el interés ahora cuenta como cobrado y los reportes cuadran', 'Si no hay internet al guardar, la app avisa que quedó guardado en el equipo y se sube solo cuando vuelve la red', 'Con muchos registros en la nube (más de mil) ahora se cargan todos', '"Olvidé mi PIN" ahora sí borra los datos del teléfono, como decía el aviso']},
   {f: '3 de noviembre — noche', t: ['Ventas a crédito: ahora puedes ponerles un cargo por atraso (% del saldo por día). Si el cliente no paga en la fecha acordada, empieza a generarse mora', 'La mora de una venta sale en la lista de cobros, en la lista de ventas y en los recibos; se cobra aparte del saldo, igual que en los préstamos', 'Si lo dejas en 0 no cobra mora, como antes']},
   {f: '3 de noviembre', t: ['Arreglados los botones "Imprimir / PDF" del préstamo y "Imprimir tabla / PDF": ya funcionan', 'En el celular ahora se comparte un PDF de verdad (antes salía un archivo .html); el recibo tiene botón "Enviar PDF"', 'El estado de cuenta y la tabla del préstamo muestran lo atrasado, la mora generada, cobrada y pendiente, y el total atrasado con mora', 'El recibo de pago de cuota ahora trae la mora generada y la mora pendiente']},

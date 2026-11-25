@@ -20,7 +20,7 @@ const calc = path.join(tmp, 'calculos.js'), sync = path.join(tmp, 'sync.js');
 fs.writeFileSync(calc, 'const document={querySelector(){return null}};\n' + cols + '\n' + core + '\n' + loans + '\n' + leer('calc_cases.js'));
 fs.writeFileSync(sync, leer('sync_cases.js').replace('/*COLS*/', () => cols).replace('/*NUBE*/', () => nube.replace(/setInterval\(/g, 'setIntervalStub(')));
 fs.writeFileSync(path.join(tmp, 'package.json'), '{}');
-const pasos = [['Fórmulas (préstamos, mora, pago total, ventas)', [calc]], ['Sincronización con la nube', [sync]], ['Recorrido de la app completa', [path.join(__dirname, 'smoke.js'), indexHtml]]];
+const pasos = [['Fórmulas (préstamos, mora, pago total, ventas)', [calc]], ['Sincronización con la nube', [sync]], ['Recorrido de la app completa', [path.join(__dirname, 'smoke.js'), indexHtml]], ['Editar préstamos, ventas, gastos y cobros', [path.join(__dirname, 'editar.js'), indexHtml]]];
 let mal = 0;
 for (const [nombre, args] of pasos) {
   console.log('\n### ' + nombre);
